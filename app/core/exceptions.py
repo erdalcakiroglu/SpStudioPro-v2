@@ -221,6 +221,117 @@ class MetadataLoadError(AnalysisError):
 
 
 # =============================================================================
+# Collector Errors
+# =============================================================================
+
+
+class CollectorError(SQLPerfAIError):
+    """Base error for data collectors"""
+    
+    def __init__(
+        self,
+        message: str,
+        collector_name: Optional[str] = None,
+        step_name: Optional[str] = None,
+        is_retryable: bool = False,
+        **kwargs
+    ):
+        details = {
+            "collector": collector_name,
+            "step": step_name,
+            "retryable": is_retryable,
+            **kwargs
+        }
+        super().__init__(message, details)
+        self.collector_name = collector_name
+        self.step_name = step_name
+        self.is_retryable = is_retryable
+
+
+class CollectorTimeoutError(CollectorError):
+    """Collection step timed out"""
+    
+    def __init__(self, collector_name: str, timeout_seconds: int, **kwargs):
+        message = f"Collector '{collector_name}' timed out after {timeout_seconds}s"
+        super().__init__(
+            message,
+            collector_name=collector_name,
+            is_retryable=True,
+            timeout_seconds=timeout_seconds,
+            **kwargs
+        )
+
+
+class CollectorSkippedError(CollectorError):
+    """Collection step was skipped"""
+    
+    def __init__(self, collector_name: str, reason: str, **kwargs):
+        message = f"Collector '{collector_name}' skipped: {reason}"
+        super().__init__(
+            message,
+            collector_name=collector_name,
+            is_retryable=False,
+            skip_reason=reason,
+            **kwargs
+        )
+
+
+class SourceCodeNotFoundError(CollectorError):
+    """Source code could not be retrieved"""
+    
+    def __init__(self, object_name: str, **kwargs):
+        message = f"Source code not found for '{object_name}'"
+        super().__init__(
+            message,
+            collector_name="source_code",
+            is_retryable=False,
+            object_name=object_name,
+            **kwargs
+        )
+
+
+class QueryStoreDisabledError(CollectorError):
+    """Query Store is not enabled"""
+    
+    def __init__(self, database: str, **kwargs):
+        message = f"Query Store is disabled for database '{database}'"
+        super().__init__(
+            message,
+            collector_name="query_store",
+            is_retryable=False,
+            database=database,
+            **kwargs
+        )
+
+
+class PlanNotFoundError(CollectorError):
+    """Execution plan could not be found"""
+    
+    def __init__(self, object_name: str, **kwargs):
+        message = f"Execution plan not found for '{object_name}'"
+        super().__init__(
+            message,
+            collector_name="plan_xml",
+            is_retryable=True,
+            object_name=object_name,
+            **kwargs
+        )
+
+
+class CollectionPipelineError(CollectorError):
+    """Pipeline execution failed"""
+    
+    def __init__(self, message: str, failed_steps: Optional[list] = None, **kwargs):
+        super().__init__(
+            message,
+            collector_name="pipeline",
+            is_retryable=False,
+            failed_steps=failed_steps or [],
+            **kwargs
+        )
+
+
+# =============================================================================
 # Task Errors
 # =============================================================================
 
@@ -238,3 +349,26 @@ class TaskCancelledError(TaskError):
 class TaskTimeoutError(TaskError):
     """Task timed out"""
     pass
+
+
+# =============================================================================
+# Retry Errors
+# =============================================================================
+
+
+class RetryError(SQLPerfAIError):
+    """Retry related errors"""
+    pass
+
+
+class RetryExhaustedError(RetryError):
+    """All retry attempts exhausted"""
+    
+    def __init__(self, message: str, attempts: int, last_exception: Optional[Exception] = None):
+        details = {
+            "attempts": attempts,
+            "last_error": str(last_exception) if last_exception else None,
+        }
+        super().__init__(message, details)
+        self.attempts = attempts
+        self.last_exception = last_exception

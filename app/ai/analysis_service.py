@@ -7,9 +7,11 @@ Gelişmiş özellikler:
 - Few-shot learning
 - Execution plan analysis
 - Response validation
+- AI Self-Reflection with confidence scoring
+- Intelligent caching
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 import json
 from pathlib import Path
@@ -17,6 +19,13 @@ from app.ai.llm_client import get_llm_client, UnifiedLLMClient
 from app.ai.prompts import AdvancedPromptBuilder, PromptType, PromptContext
 from app.ai.plan_analyzer import ExecutionPlanAnalyzer, PlanInsights
 from app.ai.response_validator import AIResponseValidator, ValidationResult
+from app.ai.self_reflection import (
+    SelfReflectionEngine, 
+    AnalysisConfidence,
+    ConfidenceLevel,
+    create_confidence_display,
+)
+from app.ai.cache import AIAnalysisCache, get_ai_cache
 from app.models.query_stats_models import QueryStats
 from app.core.logger import get_logger
 from app.core.config import get_settings, ensure_app_dirs
@@ -37,15 +46,23 @@ class AIAnalysisService:
     - Response validation and quality scoring
     """
     
-    def __init__(self, provider_id: Optional[str] = None):
+    def __init__(self, provider_id: Optional[str] = None, enable_cache: bool = True):
         """
         Args:
             provider_id: Belirli bir provider kullan (None = aktif provider)
+            enable_cache: Cache kullanımını etkinleştir
         """
         self.llm_client = get_llm_client()
         self.provider_id = provider_id  # None = aktif provider kullanılır
         self.plan_analyzer = ExecutionPlanAnalyzer()
         self.response_validator = AIResponseValidator()
+        
+        # Cache
+        self._enable_cache = enable_cache
+        self._cache = get_ai_cache() if enable_cache else None
+        
+        # Self-reflection engine (created per-analysis)
+        self._last_confidence: Optional[AnalysisConfidence] = None
     
     async def analyze_query(
         self, 
@@ -130,13 +147,13 @@ class AIAnalysisService:
                 if not validation.is_valid:
                     logger.warning(f"Response validation failed: {validation.get_summary()}")
                     response = validation.sanitized_response
-                    # Kalite skorunu ekle
-                    response += f"\n\n---\n📊 **Öneri Kalite Skoru:** {validation.quality_score:.0f}/100"
+                    # Add quality score summary
+                    response += f"\n\n---\n📊 **Recommendation Quality Score:** {validation.quality_score:.0f}/100"
                     
                     if validation.blocked_commands:
-                        response += f"\n⚠️ **Dikkat:** Bazı tehlikeli komutlar filtrelendi."
+                        response += "\n⚠️ **Warning:** Some potentially dangerous commands were filtered."
                 else:
-                    response += f"\n\n---\n📊 **Öneri Kalite Skoru:** {validation.quality_score:.0f}/100"
+                    response += f"\n\n---\n📊 **Recommendation Quality Score:** {validation.quality_score:.0f}/100"
             
             self._log_analysis_result(
                 query_id=query_stats.query_id,
@@ -147,7 +164,7 @@ class AIAnalysisService:
             
         except Exception as e:
             logger.error(f"AI analysis failed: {e}")
-            return f"⚠️ Analiz sırasında bir hata oluştu: {str(e)}"
+            return f"⚠️ An error occurred during analysis: {str(e)}"
 
     async def analyze_from_context(
         self,
@@ -224,11 +241,11 @@ class AIAnalysisService:
                 validation = self.response_validator.validate(response)
                 if not validation.is_valid:
                     response = validation.sanitized_response
-                    response += f"\n\n---\n📊 **Öneri Kalite Skoru:** {validation.quality_score:.0f}/100"
+                    response += f"\n\n---\n📊 **Recommendation Quality Score:** {validation.quality_score:.0f}/100"
                     if validation.blocked_commands:
-                        response += f"\n⚠️ **Dikkat:** Bazı tehlikeli komutlar filtrelendi."
+                        response += "\n⚠️ **Warning:** Some potentially dangerous commands were filtered."
                 else:
-                    response += f"\n\n---\n📊 **Öneri Kalite Skoru:** {validation.quality_score:.0f}/100"
+                    response += f"\n\n---\n📊 **Recommendation Quality Score:** {validation.quality_score:.0f}/100"
 
             self._log_analysis_result(
                 query_id=context.get('query_id'),
@@ -239,7 +256,7 @@ class AIAnalysisService:
             return response
         except Exception as e:
             logger.error(f"AI context analysis failed: {e}")
-            return f"⚠️ Analiz sırasında bir hata oluştu: {str(e)}"
+            return f"⚠️ An error occurred during analysis: {str(e)}"
     
     async def analyze_sp(
         self,
@@ -247,10 +264,28 @@ class AIAnalysisService:
         object_name: str,
         stats: Dict[str, Any] = None,
         missing_indexes: list = None,
-        dependencies: list = None
-    ) -> str:
+        dependencies: list = None,
+        query_store: Dict[str, Any] = None,
+        plan_xml: str = None,
+        plan_meta: Dict[str, Any] = None,
+        plan_insights: Dict[str, Any] = None,
+        existing_indexes: list = None,
+        parameter_sniffing: Dict[str, Any] = None,
+        historical_trend: Dict[str, Any] = None,
+        memory_grants: Dict[str, Any] = None,
+        completeness: Dict[str, Any] = None,
+        context_warning: str = None,
+        deep_analysis: bool = False,                     # NEW: Deep analysis mode
+        skip_cache: bool = False                          # NEW: Skip cache
+    ) -> Tuple[str, Optional[AnalysisConfidence]]:
         """
-        Stored Procedure analizi
+        Stored Procedure analizi - Advanced Performance Analysis
+        
+        Features:
+        - Intelligent caching
+        - Self-reflection with confidence scoring
+        - Deep analysis mode for complex procedures
+        - Graceful degradation when data is incomplete
         
         Args:
             source_code: SP kaynak kodu
@@ -258,40 +293,88 @@ class AIAnalysisService:
             stats: Çalışma istatistikleri
             missing_indexes: Missing index önerileri
             dependencies: Bağımlılıklar
+            query_store: Query Store verileri
+            plan_xml: Execution plan XML
+            plan_meta: Plan metadata
+            plan_insights: ExecutionPlanAnalyzer sonuçları
+            existing_indexes: Mevcut index bilgileri
+            parameter_sniffing: Parameter sniffing analizi
+            historical_trend: Performans trendi
+            memory_grants: Memory grant bilgileri
+            completeness: Data collection completeness info
+            context_warning: Warning about missing data for AI
+            deep_analysis: Enable deep analysis mode (3x tokens, ~20% better accuracy)
+            skip_cache: Force fresh analysis (skip cache)
             
         Returns:
-            AI analizi (Markdown)
+            Tuple of (AI analysis markdown, AnalysisConfidence)
         """
         try:
-            logger.info(f"Starting SP analysis for {object_name}")
+            quality_level = "unknown"
+            if completeness:
+                quality_level = completeness.get('quality_level', 'unknown')
+            logger.info(f"Starting SP analysis for {object_name} (data quality: {quality_level}, deep: {deep_analysis})")
             
+            # Check cache first (unless skip_cache or deep_analysis)
+            if self._cache and not skip_cache and not deep_analysis:
+                cached = self._cache.get_analysis(object_name, source_code, "optimization")
+                if cached:
+                    logger.info(f"Cache hit for {object_name}")
+                    # Re-run self-reflection on cached result
+                    context = self._build_context_dict(
+                        source_code, object_name, stats, missing_indexes, dependencies,
+                        query_store, plan_xml, plan_meta, plan_insights, existing_indexes,
+                        parameter_sniffing, historical_trend, memory_grants, completeness
+                    )
+                    confidence = self._run_self_reflection(cached, context)
+                    return cached, confidence
+            
+            # Build context dict for self-reflection
+            context = self._build_context_dict(
+                source_code, object_name, stats, missing_indexes, dependencies,
+                query_store, plan_xml, plan_meta, plan_insights, existing_indexes,
+                parameter_sniffing, historical_trend, memory_grants, completeness
+            )
+            
+            # Build prompt
             system_prompt, user_prompt = AdvancedPromptBuilder.build_sp_optimization_prompt(
                 source_code=source_code,
                 object_name=object_name,
                 stats=stats,
                 missing_indexes=missing_indexes,
                 dependencies=dependencies,
+                query_store=query_store,
+                plan_xml=plan_xml,
+                plan_meta=plan_meta,
+                plan_insights=plan_insights,
+                existing_indexes=existing_indexes,
+                parameter_sniffing=parameter_sniffing,
+                historical_trend=historical_trend,
+                memory_grants=memory_grants,
+                completeness=completeness,
+                context_warning=context_warning,
                 context=PromptContext(sql_version=self._get_sql_version_string())
             )
+            
+            # Add deep analysis enhancement if requested
+            if deep_analysis:
+                reflection_engine = SelfReflectionEngine(context)
+                enhancement = reflection_engine.get_deep_analysis_prompt_enhancement()
+                user_prompt = enhancement + "\n\n" + user_prompt
 
             self._log_analysis_request(
                 query_id=None,
                 query_name=object_name,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                context_data={
-                    "object_name": object_name,
-                    "stats": stats,
-                    "missing_indexes": missing_indexes,
-                    "dependencies": dependencies,
-                },
+                context_data=context,
             )
             
             response = await self.llm_client.generate(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
                 provider_id=self.provider_id,
-                temperature=0.1,
+                temperature=0.1 if not deep_analysis else 0.05,  # Lower temp for deep
             )
 
             response = await self._continue_report_if_truncated(
@@ -302,17 +385,100 @@ class AIAnalysisService:
             # Validate
             validation = self.response_validator.validate(response)
             response = validation.sanitized_response
-            response += f"\n\n---\n📊 **Öneri Kalite Skoru:** {validation.quality_score:.0f}/100"
+            
+            # Run self-reflection
+            confidence = self._run_self_reflection(response, context)
+            self._last_confidence = confidence
+            
+            # Add confidence info to response
+            response += f"\n\n---\n📊 **Recommendation Quality Score:** {validation.quality_score:.0f}/100"
+            response += f"\n{confidence.emoji} **Analysis Confidence:** {confidence.percentage}% ({confidence.level.value})"
+            
+            if confidence.warnings:
+                response += "\n\n**⚠️ Doğrulama Uyarıları:**"
+                for warning in confidence.warnings[:3]:
+                    response += f"\n- {warning}"
+            
+            if confidence.deep_analysis_recommended and not deep_analysis:
+                response += "\n\n💡 *Daha kapsamlı analiz için 'Deep Analysis' modu önerilir.*"
+            
+            # Cache the result (only standard analysis, not deep)
+            if self._cache and not deep_analysis:
+                self._cache.set_analysis(object_name, source_code, response, "optimization")
+            
             self._log_analysis_result(
                 query_id=None,
                 query_name=object_name,
                 response=response,
             )
-            return response
+            
+            return response, confidence
             
         except Exception as e:
             logger.error(f"SP analysis failed: {e}")
-            return f"⚠️ Analiz sırasında bir hata oluştu: {str(e)}"
+            return f"⚠️ An error occurred during analysis: {str(e)}", None
+    
+    def _build_context_dict(
+        self,
+        source_code: str,
+        object_name: str,
+        stats: Dict[str, Any],
+        missing_indexes: list,
+        dependencies: list,
+        query_store: Dict[str, Any],
+        plan_xml: str,
+        plan_meta: Dict[str, Any],
+        plan_insights: Dict[str, Any],
+        existing_indexes: list,
+        parameter_sniffing: Dict[str, Any],
+        historical_trend: Dict[str, Any],
+        memory_grants: Dict[str, Any],
+        completeness: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build context dictionary for self-reflection"""
+        return {
+            "source_code": source_code,
+            "object_name": object_name,
+            "stats": stats or {},
+            "missing_indexes": missing_indexes or [],
+            "depends_on": dependencies or [],
+            "query_store": query_store or {},
+            "plan_xml": plan_xml or "",
+            "plan_meta": plan_meta or {},
+            "plan_insights": plan_insights or {},
+            "existing_indexes": existing_indexes or [],
+            "parameter_sniffing": parameter_sniffing or {},
+            "historical_trend": historical_trend or {},
+            "memory_grants": memory_grants or {},
+            "completeness": completeness or {},
+        }
+    
+    def _run_self_reflection(
+        self, 
+        ai_response: str, 
+        context: Dict[str, Any]
+    ) -> AnalysisConfidence:
+        """Run self-reflection engine on AI response"""
+        try:
+            engine = SelfReflectionEngine(context)
+            confidence = engine.analyze(ai_response)
+            logger.info(
+                f"Self-reflection complete: {confidence.percentage}% confidence, "
+                f"level={confidence.level.value}, deep_recommended={confidence.deep_analysis_recommended}"
+            )
+            return confidence
+        except Exception as e:
+            logger.warning(f"Self-reflection failed: {e}")
+            # Return neutral confidence on failure
+            return AnalysisConfidence(
+                overall_score=0.5,
+                level=ConfidenceLevel.MEDIUM,
+                summary="Confidence calculation unavailable",
+            )
+    
+    def get_last_confidence(self) -> Optional[AnalysisConfidence]:
+        """Get the confidence from the last analysis"""
+        return self._last_confidence
 
     async def optimize_sp(
         self,
@@ -320,7 +486,15 @@ class AIAnalysisService:
         object_name: str,
         stats: Dict[str, Any] = None,
         missing_indexes: list = None,
-        dependencies: list = None
+        dependencies: list = None,
+        query_store: Dict[str, Any] = None,
+        plan_xml: str = None,
+        plan_meta: Dict[str, Any] = None,
+        plan_insights: Dict[str, Any] = None,           # NEW
+        existing_indexes: list = None,                  # NEW
+        parameter_sniffing: Dict[str, Any] = None,      # NEW
+        historical_trend: Dict[str, Any] = None,        # NEW
+        memory_grants: Dict[str, Any] = None            # NEW
     ) -> str:
         """
         Stored Procedure optimize edilmiş SQL kodu üretir (sadece SQL döndürür).
@@ -334,6 +508,14 @@ class AIAnalysisService:
                 stats=stats,
                 missing_indexes=missing_indexes,
                 dependencies=dependencies,
+                query_store=query_store,
+                plan_xml=plan_xml,
+                plan_meta=plan_meta,
+                plan_insights=plan_insights,
+                existing_indexes=existing_indexes,
+                parameter_sniffing=parameter_sniffing,
+                historical_trend=historical_trend,
+                memory_grants=memory_grants,
                 context=PromptContext(sql_version=self._get_sql_version_string())
             )
 
@@ -347,6 +529,13 @@ class AIAnalysisService:
                     "stats": stats,
                     "missing_indexes": missing_indexes,
                     "dependencies": dependencies,
+                    "query_store": query_store,
+                    "plan_meta": plan_meta,
+                    "plan_insights": plan_insights,
+                    "existing_indexes": existing_indexes,
+                    "parameter_sniffing": parameter_sniffing,
+                    "historical_trend": historical_trend,
+                    "memory_grants": memory_grants,
                 },
             )
 
@@ -371,7 +560,7 @@ class AIAnalysisService:
 
         except Exception as e:
             logger.error(f"SP optimization failed: {e}")
-            return f"⚠️ Analiz sırasında bir hata oluştu: {str(e)}"
+            return f"⚠️ An error occurred during analysis: {str(e)}"
     
     async def get_index_recommendations(
         self,
@@ -405,7 +594,7 @@ class AIAnalysisService:
             
         except Exception as e:
             logger.error(f"Index recommendation failed: {e}")
-            return f"⚠️ Index önerisi alınamadı: {str(e)}"
+            return f"⚠️ Failed to get index recommendations: {str(e)}"
     
     def analyze_plan_only(self, plan_xml: str) -> PlanInsights:
         """

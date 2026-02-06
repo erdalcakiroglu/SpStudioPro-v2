@@ -600,12 +600,57 @@ class AdvancedPromptBuilder:
     @staticmethod
     def get_system_prompt(prompt_type: PromptType) -> str:
         """Prompt türüne göre system prompt döndür"""
-        return SYSTEM_PROMPTS.get(prompt_type, SYSTEM_PROMPTS[PromptType.GENERAL_CHAT])
+        # English-first: UI defaults to English; other languages can be added later.
+        prompts_en = {
+            PromptType.QUERY_ANALYSIS: (
+                "You are a senior Microsoft SQL Server performance engineer.\n"
+                "Analyze the provided query and metrics, then propose actionable improvements.\n"
+                "Be concise and practical. Use Markdown with short headings and tables where helpful.\n"
+                "Include risk level and priority (P1/P2/P3) for each recommendation."
+            ),
+            PromptType.SP_OPTIMIZATION: (
+                "You are a senior Microsoft SQL Server stored procedure optimization specialist.\n"
+                "Review the stored procedure and propose concrete improvements.\n"
+                "Be concise, practical, and include code examples when needed.\n"
+                "Use English output."
+            ),
+            PromptType.SP_CODE_ONLY: (
+                "You are a senior Microsoft SQL Server T-SQL optimization specialist.\n"
+                "Return ONLY runnable T-SQL code. No markdown. No explanations.\n"
+                "Use English comments if needed."
+            ),
+            PromptType.INDEX_RECOMMENDATION: (
+                "You are a senior Microsoft SQL Server indexing specialist.\n"
+                "Propose index recommendations with full CREATE INDEX statements.\n"
+                "Mention trade-offs and maintenance cost. Use English output."
+            ),
+            PromptType.BLOCKING_ANALYSIS: (
+                "You are a senior Microsoft SQL Server blocking/deadlock specialist.\n"
+                "Analyze the blocking chain and provide immediate and long-term recommendations.\n"
+                "Use English output in Markdown."
+            ),
+            PromptType.WAIT_STATS_ANALYSIS: (
+                "You are a senior Microsoft SQL Server wait statistics specialist.\n"
+                "Analyze wait stats and provide prioritized recommendations.\n"
+                "Use English output in Markdown."
+            ),
+            PromptType.CODE_REVIEW: (
+                "You are a senior Microsoft SQL Server code reviewer.\n"
+                "Review the provided T-SQL for performance, correctness, and security best practices.\n"
+                "Use English output in Markdown."
+            ),
+            PromptType.GENERAL_CHAT: (
+                "You are a helpful assistant specialized in Microsoft SQL Server.\n"
+                "Be concise, practical, and performance-focused. Use English output."
+            ),
+        }
+        return prompts_en.get(prompt_type, prompts_en[PromptType.GENERAL_CHAT])
     
     @staticmethod
     def get_few_shot_examples(prompt_type: PromptType) -> str:
         """Prompt türüne göre few-shot örnekleri döndür"""
-        return FEW_SHOT_EXAMPLES.get(prompt_type, "")
+        # English-first: skip legacy few-shot examples (currently TR-heavy).
+        return ""
 
     @staticmethod
     def _apply_prompt_overrides(
@@ -633,7 +678,7 @@ class AdvancedPromptBuilder:
                     system_prompt = system_override
 
             if global_instructions:
-                system_prompt = f"{system_prompt}\n\n## EK TALIMATLAR\n{global_instructions}"
+                system_prompt = f"{system_prompt}\n\n## ADDITIONAL INSTRUCTIONS\n{global_instructions}"
 
             if user_override:
                 if "{base_user}" in user_override:
@@ -774,17 +819,66 @@ Lütfen aşağıdaki formatta kapsamlı bir analiz yap:
         stats: Dict[str, Any] = None,
         missing_indexes: List[Dict] = None,
         dependencies: List[Dict] = None,
+        query_store: Dict[str, Any] = None,
+        plan_xml: str = None,
+        plan_meta: Dict[str, Any] = None,
+        plan_insights: Dict[str, Any] = None,
+        existing_indexes: List[Dict] = None,
+        parameter_sniffing: Dict[str, Any] = None,
+        historical_trend: Dict[str, Any] = None,
+        memory_grants: Dict[str, Any] = None,
+        completeness: Dict[str, Any] = None,            # NEW: Data quality info
+        context_warning: str = None,                     # NEW: Missing data warning
         context: PromptContext = None
     ) -> tuple[str, str]:
         """
         Stored Procedure optimizasyonu için prompt oluştur.
+        Enhanced with plan insights, existing indexes, parameter sniffing analysis,
+        historical trends, memory grant information, and data completeness awareness.
         """
+        def _fmt_float(val: Any, decimals: int = 2) -> str:
+            try:
+                if val is None:
+                    val = 0.0
+                return f"{float(val):.{decimals}f}"
+            except Exception:
+                return f"{0.0:.{decimals}f}"
+
+        def _fmt_int(val: Any) -> str:
+            try:
+                if val is None:
+                    val = 0
+                return f"{int(val):,}"
+            except Exception:
+                return "0"
+
         system_prompt = cls.get_system_prompt(PromptType.SP_OPTIMIZATION)
         few_shot = cls.get_few_shot_examples(PromptType.SP_OPTIMIZATION)
         
+        # Build data quality section
+        data_quality_section = ""
+        if context_warning:
+            data_quality_section = f"""
+---
+## ⚠️ VERİ TOPLANMA BİLGİSİ:
+{context_warning}
+
+**NOT:** Eksik veri durumunda sadece mevcut bilgilerle değerlendirme yap. 
+Query Store verisi yoksa DMV istatistiklerine güven. 
+Execution plan yoksa kod analizi ağırlıklı öneriler sun.
+"""
+        elif completeness:
+            quality = completeness.get('quality_level', 'unknown')
+            score = completeness.get('completeness_score', 0)
+            if quality != 'full':
+                data_quality_section = f"""
+---
+## ℹ️ VERİ KALİTESİ: {quality.upper()} ({score:.0f}%)
+"""
+
         user_prompt = f"""
 {few_shot}
-
+{data_quality_section}
 ---
 ## ŞİMDİ OPTİMİZE EDİLECEK PROSEDÜR:
 
@@ -797,34 +891,230 @@ Lütfen aşağıdaki formatta kapsamlı bir analiz yap:
 """
         
         if stats:
+            exec_count = _fmt_int(stats.get('execution_count', 0))
+            avg_cpu = _fmt_float(stats.get('avg_cpu_ms', 0))
+            avg_duration = _fmt_float(stats.get('avg_duration_ms', 0))
+            avg_reads = _fmt_int(stats.get('avg_logical_reads', 0))
+            plan_count = _fmt_int(stats.get('plan_count', 1))
             user_prompt += f"""
 **Çalışma İstatistikleri:**
-- Toplam Çalışma: {stats.get('execution_count', 0):,}
-- Ortalama CPU: {stats.get('avg_cpu_ms', 0):.2f} ms
-- Ortalama Süre: {stats.get('avg_duration_ms', 0):.2f} ms
-- Ortalama Okuma: {stats.get('avg_logical_reads', 0):,.0f}
-- Plan Sayısı: {stats.get('plan_count', 1)}
+- Toplam Çalışma: {exec_count}
+- Ortalama CPU: {avg_cpu} ms
+- Ortalama Süre: {avg_duration} ms
+- Ortalama Okuma: {avg_reads}
+- Plan Sayısı: {plan_count}
 """
         
         if missing_indexes:
             user_prompt += "\n**SQL Server Missing Index Önerileri:**\n"
             for idx in missing_indexes[:3]:
+                impact = _fmt_float(idx.get('avg_user_impact', 0), 0)
                 user_prompt += f"- Equality: {idx.get('equality_columns', '-')}, "
                 user_prompt += f"Include: {idx.get('included_columns', '-')}, "
-                user_prompt += f"Etki: %{idx.get('avg_user_impact', 0):.0f}\n"
+                user_prompt += f"Etki: %{impact}\n"
         
         if dependencies:
             user_prompt += "\n**Bağımlılıklar:**\n"
             for dep in dependencies[:10]:
                 user_prompt += f"- {dep.get('dep_name', '')} ({dep.get('dep_type', '')})\n"
 
+        if query_store:
+            status = query_store.get("status", {})
+            summary = query_store.get("summary", {})
+            waits = query_store.get("waits", [])
+            top_queries = query_store.get("top_queries", [])
+            days = query_store.get("days", 7)
+            user_prompt += "\n**Query Store (Cumulative Runtime Stats):**\n"
+            if status:
+                user_prompt += (
+                    f"- Status: {status.get('actual_state', 'N/A')} "
+                    f"(enabled={status.get('is_enabled', False)})\n"
+                    f"- Window: last {days} day(s)\n"
+                )
+            if summary:
+                user_prompt += (
+                    f"- Total Executions: {_fmt_int(summary.get('total_executions', 0))}\n"
+                    f"- Avg Duration: {_fmt_float(summary.get('avg_duration_ms', 0))} ms\n"
+                    f"- Avg CPU: {_fmt_float(summary.get('avg_cpu_ms', 0))} ms\n"
+                    f"- Avg Logical Reads: {_fmt_int(summary.get('avg_logical_reads', 0))}\n"
+                    f"- Plan Count: {_fmt_int(summary.get('plan_count', 0))}\n"
+                )
+            if waits:
+                user_prompt += "\n**Wait Profile (Query Store):**\n"
+                for w in waits[:8]:
+                    user_prompt += (
+                        f"- {w.get('wait_category', 'Unknown')}: "
+                        f"{_fmt_float(w.get('wait_percent', 0))}% "
+                        f"({_fmt_int(w.get('total_wait_ms', 0))} ms)\n"
+                    )
+            if top_queries:
+                user_prompt += "\n**Top Statements (Query Store):**\n"
+                for q in top_queries[:3]:
+                    q_text = (q.get('query_text') or '').replace('\n', ' ')
+                    q_text = q_text[:180] + ("..." if len(q_text) > 180 else "")
+                    user_prompt += (
+                        f"- Avg Duration: {_fmt_float(q.get('avg_duration_ms', 0))} ms, "
+                        f"CPU: {_fmt_float(q.get('avg_cpu_ms', 0))} ms, "
+                        f"Reads: {_fmt_int(q.get('avg_logical_reads', 0))}, "
+                        f"Execs: {_fmt_int(q.get('total_executions', 0))}\n"
+                        f"  Text: {q_text}\n"
+                    )
+
+        if plan_meta:
+            user_prompt += "\n**Plan Metadata (cached, no execution):**\n"
+            user_prompt += f"- Source: {plan_meta.get('source', 'unknown')}\n"
+            if plan_meta.get("plan_hash"):
+                user_prompt += f"- Plan Hash: {plan_meta.get('plan_hash')}\n"
+            if plan_meta.get("plan_id"):
+                user_prompt += f"- Plan ID: {plan_meta.get('plan_id')}\n"
+            if plan_meta.get("query_id"):
+                user_prompt += f"- Query ID: {plan_meta.get('query_id')}\n"
+            if plan_meta.get("total_executions") is not None:
+                user_prompt += f"- Total Executions: {plan_meta.get('total_executions')}\n"
+            if plan_meta.get("avg_duration_ms") is not None:
+                user_prompt += f"- Avg Duration: {plan_meta.get('avg_duration_ms')}\n"
+            if plan_meta.get("avg_cpu_ms") is not None:
+                user_prompt += f"- Avg CPU: {plan_meta.get('avg_cpu_ms')}\n"
+            if plan_meta.get("avg_logical_reads") is not None:
+                user_prompt += f"- Avg Logical Reads: {plan_meta.get('avg_logical_reads')}\n"
+
+        if plan_xml:
+            max_len = 6000
+            plan_snippet = plan_xml[:max_len]
+            truncated = len(plan_xml) > max_len
+            user_prompt += "\n**Plan XML (cached, truncated):**\n```xml\n"
+            user_prompt += plan_snippet
+            if truncated:
+                user_prompt += "\n<!-- truncated -->"
+            user_prompt += "\n```\n"
+
+        # NEW: Plan Insights (from ExecutionPlanAnalyzer)
+        if plan_insights:
+            user_prompt += "\n**⚠️ Execution Plan Analysis:**\n"
+            if plan_insights.get('summary'):
+                user_prompt += f"{plan_insights.get('summary')}\n"
+            if plan_insights.get('warnings'):
+                user_prompt += "\n*Warnings:*\n"
+                for w in plan_insights.get('warnings', [])[:10]:
+                    user_prompt += f"- {w}\n"
+            if plan_insights.get('expensive_operators'):
+                user_prompt += f"\n*Expensive Operators:* {', '.join(plan_insights.get('expensive_operators', []))}\n"
+            if plan_insights.get('has_table_scan'):
+                user_prompt += "- ⚠️ Table Scan detected - index may be needed\n"
+            if plan_insights.get('has_key_lookup'):
+                user_prompt += "- ⚠️ Key Lookup detected - covering index recommended\n"
+            if plan_insights.get('has_implicit_conversion'):
+                user_prompt += "- ⚠️ Implicit Conversion detected - may prevent index usage\n"
+            if plan_insights.get('row_estimate_issues'):
+                user_prompt += "- ⚠️ Row estimate issues detected - statistics may be outdated\n"
+            if plan_insights.get('missing_indexes'):
+                user_prompt += "\n*Plan Missing Indexes:*\n"
+                for mi in plan_insights.get('missing_indexes', [])[:3]:
+                    user_prompt += f"- Table: {mi.get('table')}, Columns: {mi.get('equality_columns')}, Impact: {mi.get('impact', 0):.0f}%\n"
+
+        # NEW: Existing Indexes
+        if existing_indexes:
+            user_prompt += "\n**📊 Existing Indexes on Referenced Tables:**\n"
+            for table_info in existing_indexes[:5]:
+                user_prompt += f"\n*{table_info.get('table', '')}:*\n"
+                for idx in table_info.get('indexes', [])[:5]:
+                    idx_type = "PK" if idx.get('is_pk') else ("UQ" if idx.get('is_unique') else "IX")
+                    seeks = _fmt_int(idx.get('seeks', 0))
+                    scans = _fmt_int(idx.get('scans', 0))
+                    user_prompt += f"- [{idx_type}] {idx.get('name', '')} ({idx.get('key_columns', '')})"
+                    if idx.get('include_columns'):
+                        user_prompt += f" INCLUDE({idx.get('include_columns')})"
+                    user_prompt += f" - Seeks: {seeks}, Scans: {scans}\n"
+
+        # NEW: Parameter Sniffing Analysis
+        if parameter_sniffing:
+            risk = parameter_sniffing.get('risk_level', 'unknown')
+            risk_emoji = "🟢" if risk == "low" else ("🟡" if risk == "medium" else "🔴")
+            user_prompt += f"\n**{risk_emoji} Parameter Sniffing Analysis:**\n"
+            user_prompt += f"- Risk Level: {risk.upper()}\n"
+            user_prompt += f"- Plan Count: {parameter_sniffing.get('plan_count', 0)}\n"
+            if parameter_sniffing.get('duration_variance'):
+                user_prompt += f"- Duration Variance (CV): {parameter_sniffing.get('duration_variance')}%\n"
+            if parameter_sniffing.get('cpu_variance'):
+                user_prompt += f"- CPU Variance (CV): {parameter_sniffing.get('cpu_variance')}%\n"
+            if parameter_sniffing.get('indicators'):
+                user_prompt += "*Indicators:*\n"
+                for ind in parameter_sniffing.get('indicators', []):
+                    user_prompt += f"- {ind}\n"
+
+        # NEW: Historical Trend
+        if historical_trend:
+            direction = historical_trend.get('trend_direction', 'stable')
+            direction_emoji = "📈" if direction == "degrading" else ("📉" if direction == "improving" else "➡️")
+            user_prompt += f"\n**{direction_emoji} Historical Trend ({historical_trend.get('recent_period', 'Last 7 days')} vs {historical_trend.get('previous_period', 'Previous 7 days')}):**\n"
+            user_prompt += f"- Trend: {direction.upper()}\n"
+            if historical_trend.get('duration_change_percent') is not None:
+                user_prompt += f"- Duration Change: {historical_trend.get('duration_change_percent'):+.1f}%\n"
+            if historical_trend.get('cpu_change_percent') is not None:
+                user_prompt += f"- CPU Change: {historical_trend.get('cpu_change_percent'):+.1f}%\n"
+            if historical_trend.get('reads_change_percent') is not None:
+                user_prompt += f"- Reads Change: {historical_trend.get('reads_change_percent'):+.1f}%\n"
+            if historical_trend.get('changes'):
+                for change in historical_trend.get('changes', []):
+                    user_prompt += f"- {change}\n"
+
+        # NEW: Memory Grants
+        if memory_grants:
+            user_prompt += "\n**💾 Memory Grant Analysis:**\n"
+            user_prompt += f"- Source: {memory_grants.get('source', 'unknown')}\n"
+            if memory_grants.get('granted_memory_kb'):
+                user_prompt += f"- Granted Memory: {_fmt_int(memory_grants.get('granted_memory_kb'))} KB\n"
+            if memory_grants.get('used_memory_kb'):
+                user_prompt += f"- Used Memory: {_fmt_int(memory_grants.get('used_memory_kb'))} KB\n"
+            if memory_grants.get('utilization_pct') is not None:
+                user_prompt += f"- Utilization: {memory_grants.get('utilization_pct')}%\n"
+            if memory_grants.get('avg_memory_kb'):
+                user_prompt += f"- Avg Memory (QS): {_fmt_int(memory_grants.get('avg_memory_kb'))} KB\n"
+            if memory_grants.get('max_memory_kb'):
+                user_prompt += f"- Max Memory (QS): {_fmt_int(memory_grants.get('max_memory_kb'))} KB\n"
+            if memory_grants.get('warnings'):
+                for warn in memory_grants.get('warnings', []):
+                    user_prompt += f"- ⚠️ {warn}\n"
+
         if context and context.sql_version:
             user_prompt += f"\n**SQL Server Version:** {context.sql_version}\n"
         
         user_prompt += """
 ---
-Lütfen bu prosedürü kapsamlı olarak analiz et ve optimize edilmiş versiyonu öner.
-Ayrıca CREATE INDEX ifadelerini de ekle.
+## ANALYSIS REQUEST
+
+Please provide a comprehensive analysis including:
+
+### 1. 🧾 Executive Summary
+- 2-3 sentence overview of main findings
+
+### 2. 🔍 Identified Issues (Prioritized)
+| # | Issue | Priority | Risk | Impact |
+|---|-------|----------|------|--------|
+| ... | ... | P1/P2/P3 | Low/Med/High | ... |
+
+### 3. 💡 Optimization Recommendations
+For each recommendation:
+- Current code (problematic)
+- Optimized code
+- Expected improvement
+
+### 4. 📈 Index Recommendations
+Full CREATE INDEX statements with:
+- Rationale
+- Expected impact
+- Maintenance considerations
+
+### 5. ⚡ Parameter Sniffing Mitigation (if applicable)
+- Specific recommendations (RECOMPILE, OPTIMIZE FOR, etc.)
+
+### 6. 🧪 Testing & Validation Plan
+- How to measure improvement
+- Before/after comparison approach
+
+### 7. ⚠️ Risks & Considerations
+- Deployment risks
+- Potential side effects
 """
         return cls._apply_prompt_overrides(PromptType.SP_OPTIMIZATION, system_prompt, user_prompt)
 
@@ -836,9 +1126,33 @@ Ayrıca CREATE INDEX ifadelerini de ekle.
         stats: Dict[str, Any] = None,
         missing_indexes: List[Dict] = None,
         dependencies: List[Dict] = None,
+        query_store: Dict[str, Any] = None,
+        plan_xml: str = None,
+        plan_meta: Dict[str, Any] = None,
+        plan_insights: Dict[str, Any] = None,           # NEW
+        existing_indexes: List[Dict] = None,            # NEW
+        parameter_sniffing: Dict[str, Any] = None,      # NEW
+        historical_trend: Dict[str, Any] = None,        # NEW
+        memory_grants: Dict[str, Any] = None,           # NEW
         context: PromptContext = None
     ) -> tuple[str, str]:
         """Stored Procedure optimize edilmiş kodu (sadece SQL) için prompt oluştur."""
+        def _fmt_float(val: Any, decimals: int = 2) -> str:
+            try:
+                if val is None:
+                    val = 0.0
+                return f"{float(val):.{decimals}f}"
+            except Exception:
+                return f"{0.0:.{decimals}f}"
+
+        def _fmt_int(val: Any) -> str:
+            try:
+                if val is None:
+                    val = 0
+                return f"{int(val):,}"
+            except Exception:
+                return "0"
+
         system_prompt = cls.get_system_prompt(PromptType.SP_CODE_ONLY)
         few_shot = cls.get_few_shot_examples(PromptType.SP_OPTIMIZATION)
 
@@ -857,33 +1171,99 @@ Ayrıca CREATE INDEX ifadelerini de ekle.
 """
 
         if stats:
+            exec_count = _fmt_int(stats.get('execution_count', 0))
+            avg_cpu = _fmt_float(stats.get('avg_cpu_ms', 0))
+            avg_duration = _fmt_float(stats.get('avg_duration_ms', 0))
+            avg_reads = _fmt_int(stats.get('avg_logical_reads', 0))
+            plan_count = _fmt_int(stats.get('plan_count', 1))
             user_prompt += f"""
 **Çalışma İstatistikleri:**
-- Toplam Çalışma: {stats.get('execution_count', 0):,}
-- Ortalama CPU: {stats.get('avg_cpu_ms', 0):.2f} ms
-- Ortalama Süre: {stats.get('avg_duration_ms', 0):.2f} ms
-- Ortalama Okuma: {stats.get('avg_logical_reads', 0):,.0f}
-- Plan Sayısı: {stats.get('plan_count', 1)}
+- Toplam Çalışma: {exec_count}
+- Ortalama CPU: {avg_cpu} ms
+- Ortalama Süre: {avg_duration} ms
+- Ortalama Okuma: {avg_reads}
+- Plan Sayısı: {plan_count}
 """
 
         if missing_indexes:
             user_prompt += "\n**SQL Server Missing Index Önerileri:**\n"
             for idx in missing_indexes[:3]:
+                impact = _fmt_float(idx.get('avg_user_impact', 0), 0)
                 user_prompt += f"- Equality: {idx.get('equality_columns', '-')}, "
                 user_prompt += f"Include: {idx.get('included_columns', '-')}, "
-                user_prompt += f"Etki: %{idx.get('avg_user_impact', 0):.0f}\n"
+                user_prompt += f"Etki: %{impact}\n"
 
         if dependencies:
             user_prompt += "\n**Bağımlılıklar:**\n"
             for dep in dependencies[:10]:
                 user_prompt += f"- {dep.get('dep_name', '')} ({dep.get('dep_type', '')})\n"
 
+        if query_store:
+            status = query_store.get("status", {})
+            summary = query_store.get("summary", {})
+            waits = query_store.get("waits", [])
+            days = query_store.get("days", 7)
+            user_prompt += "\n**Query Store (Runtime Context):**\n"
+            if status:
+                user_prompt += (
+                    f"- Status: {status.get('actual_state', 'N/A')} "
+                    f"(enabled={status.get('is_enabled', False)})\n"
+                    f"- Window: last {days} day(s)\n"
+                )
+            if summary:
+                user_prompt += (
+                    f"- Total Executions: {_fmt_int(summary.get('total_executions', 0))}\n"
+                    f"- Avg Duration: {_fmt_float(summary.get('avg_duration_ms', 0))} ms\n"
+                    f"- Avg CPU: {_fmt_float(summary.get('avg_cpu_ms', 0))} ms\n"
+                    f"- Avg Logical Reads: {_fmt_int(summary.get('avg_logical_reads', 0))}\n"
+                    f"- Plan Count: {_fmt_int(summary.get('plan_count', 0))}\n"
+                )
+            if waits:
+                user_prompt += "\n**Wait Profile (Query Store):**\n"
+                for w in waits[:5]:
+                    user_prompt += (
+                        f"- {w.get('wait_category', 'Unknown')}: "
+                        f"{_fmt_float(w.get('wait_percent', 0))}%\n"
+                    )
+
+        if plan_meta:
+            user_prompt += "\n**Plan Metadata (cached, no execution):**\n"
+            user_prompt += f"- Source: {plan_meta.get('source', 'unknown')}\n"
+            if plan_meta.get("plan_hash"):
+                user_prompt += f"- Plan Hash: {plan_meta.get('plan_hash')}\n"
+            if plan_meta.get("plan_id"):
+                user_prompt += f"- Plan ID: {plan_meta.get('plan_id')}\n"
+
+        # NEW: Plan Insights (compact format for code-only output)
+        if plan_insights:
+            issues = []
+            if plan_insights.get('has_table_scan'):
+                issues.append("Table Scan")
+            if plan_insights.get('has_key_lookup'):
+                issues.append("Key Lookup")
+            if plan_insights.get('has_implicit_conversion'):
+                issues.append("Implicit Conversion")
+            if plan_insights.get('expensive_operators'):
+                issues.extend(plan_insights.get('expensive_operators', []))
+            if issues:
+                user_prompt += f"\n**Plan Issues:** {', '.join(set(issues))}\n"
+
+        # NEW: Parameter Sniffing (compact)
+        if parameter_sniffing and parameter_sniffing.get('risk_level') in ('medium', 'high'):
+            user_prompt += f"\n**Parameter Sniffing Risk:** {parameter_sniffing.get('risk_level').upper()}\n"
+
         if context and context.sql_version:
             user_prompt += f"\n**SQL Server Version:** {context.sql_version}\n"
 
         user_prompt += """
 ---
-SADECE optimize edilmiş SQL kodunu döndür.
+Return ONLY optimized SQL code. No explanations. No markdown.
+Apply these optimizations:
+1. Add SET NOCOUNT ON
+2. Replace SELECT * with specific columns
+3. Add OPTION (RECOMPILE) if parameter sniffing risk is high
+4. Add proper error handling (TRY/CATCH)
+5. Optimize joins and remove cursors if possible
 """
 
         return cls._apply_prompt_overrides(PromptType.SP_CODE_ONLY, system_prompt, user_prompt)
