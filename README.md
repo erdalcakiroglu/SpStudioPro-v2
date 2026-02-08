@@ -14,22 +14,22 @@ A professional desktop application for DBA's and developers to analyze SQL Serve
 - **Security Analysis**: SQL code security scanning
 - **Code Comparison**: Side-by-side before/after optimization view
 
-## AI Tune Akisi (Object Explorer)
+## AI Tune Flow (Object Explorer)
 
-Object Explorer icinde bir SP icin `AI Tune` calistirildiginda uygulamanin yaptigi isler:
+`AI Tune` is object-generic. It supports Stored Procedures, Views, Triggers, and Functions through a type-aware analyzer layer.
 
-1. Context menu aksiyonu `_ai_tune_object` tetiklenir ve secili obje + DB dogrulanir.
-2. `_collect_object_info` ile SP baglam verileri toplanir.
-3. `sys.sql_modules` uzerinden source code cekilir.
-4. DMV `sys.dm_exec_query_stats` ile execution istatistikleri toplanir.
-5. `sys.dm_db_missing_index_*` uzerinden missing index onerileri cekilir.
-6. Bagimliliklar (dependencies) bulunur.
-7. Query Store aktifse ozet metrikler, waits, top statements ve plan XML denenir.
-8. Query Store plan yoksa cached plan XML (DMV) ile fallback yapilir.
-9. `AITuneDialog` acilir ve analiz otomatik baslar.
-10. `AIAnalysisService.analyze_sp` cagrisi ile AI analizi yapilir.
-11. Hata olursa fallback rapor uretilir.
-12. Opsiyonel: `Kod Optimize Et` butonu ile `optimize_sp` cagrilir.
+High-level runtime flow:
+
+1. `_ai_tune_object` validates selected database object + connection context.
+2. `object_type` is normalized once at UI layer and forwarded downstream.
+3. `_collect_object_info` runs the collector pipeline and returns a unified `object_info` payload.
+4. If pipeline fails, legacy collection fallback is used.
+5. `AITuneDialog` starts `AITuneWorker` in a background thread.
+6. Worker calls `AIAnalysisService.analyze_object(...)`.
+7. Service selects the type profile from `object_analyzers.py`.
+8. Service applies validation, index policy gate (when required), optional self-reflection refinement, and cache/audit logic.
+9. Final report + confidence payload are returned to dialog.
+10. Optional optimization calls `AIAnalysisService.optimize_object(...)` via the same object-type profile system.
 
 ### Sequence Diagram
 
@@ -37,22 +37,26 @@ Object Explorer icinde bir SP icin `AI Tune` calistirildiginda uygulamanin yapti
 sequenceDiagram
   participant U as User
   participant OE as ObjectExplorerView
-  participant COL as _collect_object_info
+  participant COL as CollectorPipeline
   participant AID as AITuneDialog
   participant W as AITuneWorker
   participant AI as AIAnalysisService
+  participant OA as ObjectAnalyzerProfile
 
-  U->>OE: Right click SP -> "AI Tune"
-  OE->>OE: _ai_tune_object()
-  OE->>COL: Collect source, stats, indexes, deps
-  COL-->>OE: object_info
-  OE->>AID: AITuneDialog(object_info)
-  AID->>W: start analyze worker
-  W->>AI: analyze_sp(context)
+  U->>OE: Right click object -> "AI Tune"
+  OE->>OE: normalize object_type
+  OE->>COL: collect object_info
+  COL-->>OE: unified context
+  OE->>AID: open dialog
+  AID->>W: start analyze
+  W->>AI: analyze_object(context)
+  AI->>OA: select profile by object_type
   AI-->>W: analysis result
   W-->>AID: analysis_ready(result)
-  AID-->>U: Show analysis
+  AID-->>U: show report
 ```
+
+Detailed architecture and decision gates: `ARCHITECTURE.md`
 
 ## Technology Stack
 
