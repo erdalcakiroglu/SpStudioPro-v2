@@ -49,6 +49,10 @@ class AIAnalysisService:
     - Response validation and quality scoring
     """
     AUTO_EXECUTIVE_SUMMARY_MARKER = "## Executive Summary (Auto-Generated)"
+    SELF_REFLECTION_RETRY_ENABLED = True
+    SELF_REFLECTION_RETRY_MIN_SCORE = 0.68
+    SELF_REFLECTION_RETRY_MIN_FAILED_VALIDATIONS = 2
+    SELF_REFLECTION_RETRY_MIN_IMPROVEMENT = 0.03
     
     def __init__(self, provider_id: Optional[str] = None, enable_cache: bool = True):
         """
@@ -630,14 +634,52 @@ class AIAnalysisService:
             if requires_index_policy and not index_gate.get("allowed", False):
                 response = self._enforce_no_index_recommendations(response, index_gate)
             response = self._ensure_auto_executive_summary(response, auto_exec_summary)
-            
+             
             # Run self-reflection
             confidence = self._run_self_reflection(response, context)
+            refinement_applied = False
+            if self._should_run_self_reflection_refinement(confidence, deep_analysis=deep_analysis):
+                logger.info(
+                    f"Self-reflection refinement triggered for {object_name} "
+                    f"(confidence={confidence.percentage}%, failed_validations={confidence.failed_validations})"
+                )
+                refined_response = await self._run_self_reflection_refinement_pass(
+                    previous_response=response,
+                    confidence=confidence,
+                    system_prompt=system_prompt,
+                    object_name=object_name,
+                    object_type=normalized_object_type,
+                    analyzer_profile=analyzer_profile,
+                )
+                if refined_response:
+                    refined_response = await self._continue_report_if_truncated(
+                        response=refined_response,
+                        system_prompt=system_prompt,
+                    )
+                    refined_validation = self.response_validator.validate(refined_response)
+                    refined_response = refined_validation.sanitized_response
+                    if requires_index_policy and not index_gate.get("allowed", False):
+                        refined_response = self._enforce_no_index_recommendations(refined_response, index_gate)
+                    refined_response = self._ensure_auto_executive_summary(refined_response, auto_exec_summary)
+                    refined_confidence = self._run_self_reflection(refined_response, context)
+                    if self._is_refinement_improved(confidence, refined_confidence):
+                        response = refined_response
+                        validation = refined_validation
+                        confidence = refined_confidence
+                        refinement_applied = True
+                        logger.info(
+                            f"Self-reflection refinement accepted for {object_name} "
+                            f"(new_confidence={confidence.percentage}%)"
+                        )
+                    else:
+                        logger.info(f"Self-reflection refinement discarded for {object_name} (no meaningful improvement)")
             self._last_confidence = confidence
-            
+             
             # Add confidence info to response
             response += f"\n\n---\n📊 **Recommendation Quality Score:** {validation.quality_score:.0f}/100"
             response += f"\n{confidence.emoji} **Analysis Confidence:** {confidence.percentage}% ({confidence.level.value})"
+            if refinement_applied:
+                response += "\nℹ️ **Self-Reflection Refinement:** Applied a second-pass correction due to low confidence."
             
             if confidence.warnings:
                 response += "\n\n**⚠️ Validation Warnings:**"
@@ -1540,6 +1582,91 @@ class AIAnalysisService:
                 level=ConfidenceLevel.MEDIUM,
                 summary="Confidence calculation unavailable",
             )
+
+    def _should_run_self_reflection_refinement(
+        self,
+        confidence: Optional[AnalysisConfidence],
+        deep_analysis: bool,
+    ) -> bool:
+        """Decide whether a second LLM refinement pass should run."""
+        if deep_analysis:
+            return False
+        if not self.SELF_REFLECTION_RETRY_ENABLED:
+            return False
+        if confidence is None:
+            return False
+        return (
+            float(confidence.overall_score) < float(self.SELF_REFLECTION_RETRY_MIN_SCORE)
+            or int(confidence.failed_validations) >= int(self.SELF_REFLECTION_RETRY_MIN_FAILED_VALIDATIONS)
+        )
+
+    def _is_refinement_improved(
+        self,
+        base_confidence: AnalysisConfidence,
+        refined_confidence: AnalysisConfidence,
+    ) -> bool:
+        """Accept refinement only when confidence meaningfully improves."""
+        if refined_confidence.overall_score >= (
+            base_confidence.overall_score + self.SELF_REFLECTION_RETRY_MIN_IMPROVEMENT
+        ):
+            return True
+        if refined_confidence.failed_validations < base_confidence.failed_validations:
+            return True
+        return False
+
+    async def _run_self_reflection_refinement_pass(
+        self,
+        previous_response: str,
+        confidence: AnalysisConfidence,
+        system_prompt: str,
+        object_name: str,
+        object_type: str,
+        analyzer_profile: Any,
+    ) -> str:
+        """
+        Run a second-pass refinement focused on self-reflection findings.
+        Returns empty string if refinement fails.
+        """
+        try:
+            warnings = confidence.warnings[:5] if isinstance(confidence.warnings, list) else []
+            warning_text = "\n".join(f"- {w}" for w in warnings) if warnings else "- No explicit warning text was produced."
+            instruction_prompt = (
+                "Refine the previous report to improve reliability.\n"
+                "Address validation warnings directly, remove speculative claims, and keep evidence-grounded statements only.\n"
+                "Preserve the requested structure and output in English.\n"
+            )
+            refinement_payload = self._build_json_user_prompt(
+                request_type=f"{getattr(analyzer_profile, 'request_type', 'object_performance_analysis')}_self_reflection_refinement",
+                metadata={
+                    "object_name": object_name,
+                    "object_type": object_type,
+                    "phase": "self_reflection_refinement",
+                    "base_confidence_pct": confidence.percentage,
+                },
+                instruction_prompt=instruction_prompt,
+                input_data={
+                    "object_name": object_name,
+                    "object_type": object_type,
+                    "base_confidence": confidence.to_display_dict(),
+                    "validation_warnings": warnings,
+                    "previous_response": previous_response,
+                    "self_reflection_findings": warning_text,
+                },
+                output_contract={
+                    "format": "markdown",
+                    "sections": list(getattr(analyzer_profile, "sections", []) or []),
+                    "section_requirements": dict(getattr(analyzer_profile, "section_requirements", {}) or {}),
+                },
+            )
+            return await self.llm_client.generate(
+                prompt=refinement_payload,
+                system_prompt=system_prompt,
+                provider_id=self.provider_id,
+                temperature=0.05,
+            )
+        except Exception as e:
+            logger.warning(f"Self-reflection refinement pass failed: {e}")
+            return ""
     
     def get_last_confidence(self) -> Optional[AnalysisConfidence]:
         """Get the confidence from the last analysis"""
