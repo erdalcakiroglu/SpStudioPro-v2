@@ -173,6 +173,7 @@ class PlanInsights:
                 {
                     "table": f"{mi.schema_name}.{mi.table_name}",
                     "equality_columns": mi.equality_columns,
+                    "inequality_columns": mi.inequality_columns,
                     "include_columns": mi.include_columns,
                     "impact": mi.impact
                 }

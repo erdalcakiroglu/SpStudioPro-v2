@@ -100,7 +100,7 @@ class AISettings(BaseSettings):
             "query_analysis": {
                 "system": (
                     "{base_system}\n\n"
-                    "Output must be in Turkish. Use clear headings and tables where appropriate."
+                    "Output must be in English. Use clear headings and tables where appropriate."
                 ),
                 "user": "{base_user}",
             },
@@ -148,6 +148,17 @@ class UISettings(BaseSettings):
     font_size: int = Field(default=13, ge=10, le=24)
     code_font_size: int = Field(default=12, ge=10, le=24)
     show_line_numbers: bool = Field(default=True)
+    navigation_visibility: dict[str, bool] = Field(default_factory=lambda: {
+        "chat": True,
+        "dashboard": True,
+        "sp_explorer": True,
+        "query_stats": True,
+        "index_advisor": True,
+        "blocking": True,
+        "security": True,
+        "jobs": True,
+        "wait_stats": True,
+    })
 
 
 class CacheSettings(BaseSettings):
@@ -198,6 +209,7 @@ class Settings(BaseSettings):
     
     # Feature flags
     enable_telemetry: bool = Field(default=False)
+    enable_auto_connect: bool = Field(default=False)
     enable_auto_update: bool = Field(default=True)
     
     # Recent connections (stored separately but quick access here)
@@ -269,8 +281,10 @@ def get_settings() -> Settings:
     global _settings
     if _settings is None:
         _settings = Settings.load()
-        # Initialize i18n with saved language
-        _init_i18n(_settings.ui.language)
+        # Default UI language is English for now.
+        # We keep the enum/translation infra, but clamp runtime language to EN.
+        _settings.ui.language = Language.ENGLISH
+        _init_i18n(Language.ENGLISH)
     return _settings
 
 
@@ -309,11 +323,14 @@ def update_settings(**kwargs) -> Settings:
             else:
                 setattr(settings, key, value)
     
+    # Clamp language to English for now (other UI languages will be added later).
+    settings.ui.language = Language.ENGLISH
+
     settings.save()
     _settings = settings
     
-    # Update i18n if language changed
+    # Keep i18n in sync (English only for now)
     if settings.ui.language != old_language:
-        _init_i18n(settings.ui.language)
+        _init_i18n(Language.ENGLISH)
     
     return settings

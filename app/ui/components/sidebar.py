@@ -3,7 +3,7 @@ Sidebar Navigation Component - Modern Enterprise Design (GUI-05 Style)
 Light theme with Teal accent
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict
 from dataclasses import dataclass
 
 from PyQt6.QtWidgets import (
@@ -71,6 +71,8 @@ class DarkSidebar(QWidget):
         self._nav_buttons: dict[str, QPushButton] = {}
         self._current_nav_id: Optional[str] = None
         self._collapsed = False
+        self._main_nav_ids = [item.id for item in self.MAIN_NAV_ITEMS]
+        self._tools_nav_ids = [item.id for item in self.TOOLS_NAV_ITEMS]
         
         # Store labels for i18n
         self._main_label: Optional[QLabel] = None
@@ -359,6 +361,49 @@ class DarkSidebar(QWidget):
             btn.setStyleSheet(self._get_nav_button_style(is_active))
         
         self._current_nav_id = item_id
+
+    def _refresh_section_visibility(self) -> None:
+        """Show/hide section labels based on visible buttons."""
+        if self._main_label:
+            self._main_label.setVisible(
+                any(self._nav_buttons.get(nav_id) and self._nav_buttons[nav_id].isVisible()
+                    for nav_id in self._main_nav_ids)
+            )
+        if self._tools_label:
+            self._tools_label.setVisible(
+                any(self._nav_buttons.get(nav_id) and self._nav_buttons[nav_id].isVisible()
+                    for nav_id in self._tools_nav_ids)
+            )
+
+    def get_first_visible_nav_id(self) -> Optional[str]:
+        """Return first visible navigation id. Falls back to settings."""
+        ordered_ids = self._main_nav_ids + self._tools_nav_ids + ["settings"]
+        for nav_id in ordered_ids:
+            btn = self._nav_buttons.get(nav_id)
+            if btn and btn.isVisible():
+                return nav_id
+        return None
+
+    def set_menu_visibility(self, visibility: Dict[str, bool]) -> None:
+        """
+        Apply menu visibility settings.
+        `settings` button is always kept visible to avoid lock-out.
+        """
+        for nav_id, btn in self._nav_buttons.items():
+            if nav_id == "settings":
+                btn.setVisible(True)
+                continue
+            btn.setVisible(bool(visibility.get(nav_id, True)))
+
+        self._refresh_section_visibility()
+
+        # If current item becomes hidden, switch visual active state to first visible item.
+        if self._current_nav_id:
+            current_btn = self._nav_buttons.get(self._current_nav_id)
+            if current_btn and not current_btn.isVisible():
+                fallback_id = self.get_first_visible_nav_id()
+                if fallback_id:
+                    self._set_button_active(fallback_id)
 
     def set_current(self, item_id: str) -> None:
         """Set the currently selected navigation item"""

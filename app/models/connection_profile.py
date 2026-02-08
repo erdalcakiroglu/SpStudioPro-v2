@@ -78,9 +78,14 @@ class ConnectionProfile:
         Generate base connection string (without password)
         Password should be added by the connection manager
         """
-        server = self.server
-        if "\\" in server:
-            server_value = server if self.port == 1433 else f"{server},{self.port}"
+        server = (self.server or "").strip()
+        if "," in server:
+            server_value = server
+        elif "\\" in server and self.port != 1433:
+            host = server.split("\\", 1)[0]
+            server_value = f"tcp:{host},{self.port}"
+        elif "\\" in server:
+            server_value = server
         else:
             server_value = f"{server},{self.port}"
 

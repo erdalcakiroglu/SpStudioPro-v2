@@ -16,15 +16,15 @@ class AIAnalysisDialog(QDialog):
     
     # Analiz aşamaları
     STAGES = {
-        'init': ('🔄', 'Başlatılıyor...'),
-        'context': ('📋', 'Sorgu bağlamı hazırlanıyor...'),
-        'connect': ('🔗', 'AI servisine bağlanılıyor...'),
-        'analyze': ('🧠', 'Sorgu analiz ediliyor...'),
-        'metrics': ('📊', 'Metrikler değerlendiriliyor...'),
-        'optimize': ('⚡', 'Optimizasyon önerileri hazırlanıyor...'),
-        'format': ('📝', 'Sonuç formatlanıyor...'),
-        'complete': ('✅', 'Analiz tamamlandı!'),
-        'error': ('❌', 'Hata oluştu'),
+        'init': ('🔄', 'Initializing...'),
+        'context': ('📋', 'Preparing query context...'),
+        'connect': ('🔗', 'Connecting to AI service...'),
+        'analyze': ('🧠', 'Analyzing query...'),
+        'metrics': ('📊', 'Evaluating metrics...'),
+        'optimize': ('⚡', 'Preparing optimization recommendations...'),
+        'format': ('📝', 'Formatting results...'),
+        'complete': ('✅', 'Analysis completed!'),
+        'error': ('❌', 'Error occurred'),
     }
 
     STAGE_ORDER = [
@@ -49,7 +49,7 @@ class AIAnalysisDialog(QDialog):
         self._auto_start = auto_start
         self._stage_progress = {stage: idx for idx, stage in enumerate(self.STAGE_ORDER)}
         
-        self.setWindowTitle(f"AI Analizi: {self.query_name}")
+        self.setWindowTitle(f"AI Analysis: {self.query_name}")
         self.setMinimumSize(900, 650)
         self._setup_ui()
         
@@ -67,13 +67,13 @@ class AIAnalysisDialog(QDialog):
         
         # Başlık
         header = QHBoxLayout()
-        self.title_label = QLabel(f"🤖 AI Performans Analizi: {self.query_name}")
+        self.title_label = QLabel(f"🤖 AI Performance Analysis: {self.query_name}")
         self.title_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {Colors.SECONDARY};")
         header.addWidget(self.title_label)
         header.addStretch()
         
         # Current stage indicator
-        self._stage_label = QLabel("🔄 Başlatılıyor...")
+        self._stage_label = QLabel("🔄 Initializing...")
         self._stage_label.setStyleSheet(f"""
             QLabel {{
                 color: {Colors.TEXT_SECONDARY};
@@ -117,7 +117,7 @@ class AIAnalysisDialog(QDialog):
         info_layout = QHBoxLayout(info_frame)
         info_layout.setContentsMargins(12, 8, 12, 8)
         info_layout.setSpacing(8)
-        self._info_label = QLabel("İşlem adımı: Başlatılıyor... (0%)")
+        self._info_label = QLabel("Step: Initializing... (0%)")
         self._info_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
         info_layout.addWidget(self._info_label)
         info_layout.addStretch()
@@ -145,13 +145,13 @@ class AIAnalysisDialog(QDialog):
         result_layout.setContentsMargins(12, 8, 12, 12)
         result_layout.setSpacing(8)
         
-        result_title = QLabel("📄 Analiz Sonucu")
+        result_title = QLabel("📄 Analysis Result")
         result_title.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-weight: 600; font-size: 12px;")
         result_layout.addWidget(result_title)
         
         self.result_area = QTextEdit()
         self.result_area.setReadOnly(True)
-        self.result_area.setPlaceholderText("AI analizi hazırlanıyor, lütfen bekleyin...")
+        self.result_area.setPlaceholderText("Preparing AI analysis, please wait...")
         self.result_area.setStyleSheet(f"""
             QTextEdit {{
                 background-color: transparent;
@@ -177,12 +177,12 @@ class AIAnalysisDialog(QDialog):
         log_layout.setSpacing(8)
         
         log_header = QHBoxLayout()
-        log_title = QLabel("📋 İşlem Logları")
+        log_title = QLabel("📋 Process Logs")
         log_title.setStyleSheet("color: #94a3b8; font-weight: 600; font-size: 11px;")
         log_header.addWidget(log_title)
         log_header.addStretch()
         
-        self._clear_log_btn = QPushButton("Temizle")
+        self._clear_log_btn = QPushButton("Clear")
         self._clear_log_btn.setFixedHeight(22)
         self._clear_log_btn.setStyleSheet("""
             QPushButton {
@@ -223,7 +223,7 @@ class AIAnalysisDialog(QDialog):
         
         # Butonlar
         button_layout = QHBoxLayout()
-        self.save_btn = QPushButton("💾 Raporu Kaydet")
+        self.save_btn = QPushButton("💾 Save Report")
         self.save_btn.clicked.connect(self._save_report)
         self.save_btn.setEnabled(False)
         self.save_btn.setStyleSheet(f"""
@@ -243,7 +243,7 @@ class AIAnalysisDialog(QDialog):
             }}
         """)
 
-        self.copy_btn = QPushButton("📋 Metni Kopyala")
+        self.copy_btn = QPushButton("📋 Copy Text")
         self.copy_btn.clicked.connect(self._copy_to_clipboard)
         self.copy_btn.setEnabled(False)
         self.copy_btn.setStyleSheet(f"""
@@ -263,7 +263,7 @@ class AIAnalysisDialog(QDialog):
             }}
         """)
         
-        self.view_report_btn = QPushButton("📄 Raporu Gör")
+        self.view_report_btn = QPushButton("📄 View Report")
         self.view_report_btn.clicked.connect(self.accept)
         self.view_report_btn.setVisible(False)
         self.view_report_btn.setStyleSheet(f"""
@@ -280,7 +280,7 @@ class AIAnalysisDialog(QDialog):
             }}
         """)
 
-        self.close_btn = QPushButton("Kapat")
+        self.close_btn = QPushButton("Close")
         self.close_btn.clicked.connect(self.reject)
         self.close_btn.setStyleSheet(f"""
             QPushButton {{
@@ -308,7 +308,7 @@ class AIAnalysisDialog(QDialog):
         self._current_stage = stage
         timestamp = datetime.now().strftime("%H:%M:%S")
         
-        icon, default_msg = self.STAGES.get(stage, ('ℹ️', message or 'İşlem devam ediyor...'))
+        icon, default_msg = self.STAGES.get(stage, ('ℹ️', message or 'Processing...'))
         display_msg = message or default_msg
         
         # Color based on stage
@@ -338,7 +338,7 @@ class AIAnalysisDialog(QDialog):
             total = max(len(self.STAGE_ORDER) - 1, 1)
             progress = int((idx / total) * 100)
             self.progress_bar.setValue(progress)
-            self._info_label.setText(f"İşlem adımı: {display_msg} ({progress}%)")
+            self._info_label.setText(f"Step: {display_msg} ({progress}%)")
         
         if stage == 'complete':
             self._stage_label.setStyleSheet(f"""
@@ -371,7 +371,7 @@ class AIAnalysisDialog(QDialog):
         try:
             from app.ui.components.ai_worker import AIAnalysisWorker
             
-            self.add_log('context', 'Sorgu bağlamı hazırlanıyor...')
+            self.add_log('context', 'Preparing query context...')
             
             # Worker oluştur
             self._worker = AIAnalysisWorker(context=self._context)
@@ -383,8 +383,8 @@ class AIAnalysisDialog(QDialog):
             self._worker.start()
             
         except ImportError as e:
-            self.add_log('error', f'AI modülü yüklenemedi: {e}')
-            self.set_error(f"AI modülü yüklenemedi: {e}")
+            self.add_log('error', f'Failed to load AI module: {e}')
+            self.set_error(f"Failed to load AI module: {e}")
         except Exception as e:
             self.add_log('error', str(e))
             self.set_error(str(e))
@@ -419,7 +419,7 @@ class AIAnalysisDialog(QDialog):
         """Hata mesajını gösterir"""
         self._result = None
         self.progress_bar.setValue(0)
-        self.result_area.setText(f"❌ Hata: {error_msg}")
+        self.result_area.setText(f"❌ Error: {error_msg}")
         self.result_area.setStyleSheet(f"""
             QTextEdit {{
                 background-color: transparent;
@@ -433,17 +433,17 @@ class AIAnalysisDialog(QDialog):
     def _copy_to_clipboard(self):
         from PyQt6.QtWidgets import QApplication
         QApplication.clipboard().setText(self.result_area.toPlainText())
-        self.add_log('init', 'Sonuç panoya kopyalandı')
+        self.add_log('init', 'Result copied to clipboard')
 
     def _save_report(self):
         """Save the report to a file in formatted form."""
         if not self._result:
-            QMessageBox.information(self, "Rapor", "Kaydedilecek bir rapor bulunamadı.")
+            QMessageBox.information(self, "Report", "No report available to save.")
             return
 
         file_path, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Raporu Kaydet",
+            "Save Report",
             f"AI_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
             "HTML (*.html);;Markdown (*.md);;Text (*.txt)"
         )
@@ -461,6 +461,6 @@ class AIAnalysisDialog(QDialog):
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
-            self.add_log('init', f'Rapor kaydedildi: {file_path}')
+            self.add_log('init', f'Report saved: {file_path}')
         except Exception as e:
-            QMessageBox.warning(self, "Rapor", f"Rapor kaydedilemedi: {e}")
+            QMessageBox.warning(self, "Report", f"Failed to save report: {e}")

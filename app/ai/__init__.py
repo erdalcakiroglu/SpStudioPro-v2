@@ -10,6 +10,8 @@ Modules:
 - analysis_service: Main analysis orchestrator
 - chat_service: Conversational AI assistant
 - intent_detector: Natural language intent detection
+- cache: Intelligent caching for AI responses
+- self_reflection: Confidence scoring and validation
 """
 
 # Unified LLM Client (Multi-provider support)
@@ -70,6 +72,24 @@ from app.ai.response_validator import (
 
 from app.ai.analysis_service import AIAnalysisService
 
+from app.ai.cache import (
+    AIAnalysisCache,
+    get_ai_cache,
+    CacheConfig,
+    CacheLevel,
+    cached_analysis,
+)
+
+from app.ai.self_reflection import (
+    SelfReflectionEngine,
+    AnalysisConfidence,
+    ConfidenceLevel,
+    HallucinationDetector,
+    ApplicabilityChecker,
+    SeverityCalibrator,
+    create_confidence_display,
+)
+
 __all__ = [
     # Unified LLM Client
     'UnifiedLLMClient',
@@ -122,4 +142,20 @@ __all__ = [
     
     # Services
     'AIAnalysisService',
+    
+    # Cache
+    'AIAnalysisCache',
+    'get_ai_cache',
+    'CacheConfig',
+    'CacheLevel',
+    'cached_analysis',
+    
+    # Self-Reflection
+    'SelfReflectionEngine',
+    'AnalysisConfidence',
+    'ConfidenceLevel',
+    'HallucinationDetector',
+    'ApplicabilityChecker',
+    'SeverityCalibrator',
+    'create_confidence_display',
 ]

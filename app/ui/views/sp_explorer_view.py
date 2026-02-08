@@ -29,6 +29,7 @@ from app.ai.collectors import (
     ProgressObserver,
     ProgressPhase,
 )
+from app.ai.object_analyzers import normalize_object_type
 
 logger = get_logger('ui.explorer')
 
@@ -1292,12 +1293,12 @@ class ObjectExplorerView(BaseView):
         if not db_name or db_name == "(None)":
             return
         
-        object_info = self._collect_object_info(db_name, full_name)
+        object_info = self._collect_object_info(db_name, full_name, type_code=type_code)
         
         dialog = AITuneDialog(object_info, self)
         dialog.exec()
     
-    def _collect_object_info(self, db_name: str, full_name: str) -> dict:
+    def _collect_object_info(self, db_name: str, full_name: str, type_code: str = "") -> dict:
         """
         Nesnenin tüm bilgilerini topla - Pipeline-based Collection
         
@@ -1306,10 +1307,18 @@ class ObjectExplorerView(BaseView):
         conn_mgr = get_connection_manager()
         active_conn = conn_mgr.active_connection
         
+        resolved_type_code = str(type_code or self._selected_object_type_code or "").strip().upper()
+        if not resolved_type_code:
+            resolved_type_code = str(self._resolve_object_type_code(db_name, full_name) or "").strip().upper()
+        normalized_type = normalize_object_type(resolved_type_code)
+
         # Default empty info structure
         empty_info = {
             'database': db_name,
             'full_name': full_name,
+            'object_type_code': resolved_type_code,
+            'object_type': normalized_type,
+            'object_resolution': {'object_resolved': False, 'object_id': None},
             'source_code': '',
             'stats': {},
             'depends_on': [],
@@ -1344,6 +1353,14 @@ class ObjectExplorerView(BaseView):
             
             # Convert to legacy object_info format
             info = pipeline.to_object_info(context)
+            info['object_type_code'] = resolved_type_code
+            info['object_type'] = normalize_object_type(
+                resolved_type_code,
+                source_code=str(info.get('source_code', '') or ''),
+            )
+            if isinstance(info.get('object_resolution'), dict):
+                info['object_resolution']['object_type'] = info['object_type']
+                info['object_resolution']['object_type_code'] = resolved_type_code
             
             logger.info(f"Pipeline collection completed for {full_name}: {len(info.get('collection_log', []))} steps")
             return info
@@ -1353,9 +1370,9 @@ class ObjectExplorerView(BaseView):
             empty_info['collection_log'].append(f"Pipeline ERROR: {e}")
             
             # Fallback to legacy collection
-            return self._collect_object_info_legacy(db_name, full_name)
+            return self._collect_object_info_legacy(db_name, full_name, type_code=resolved_type_code)
     
-    def _collect_object_info_legacy(self, db_name: str, full_name: str) -> dict:
+    def _collect_object_info_legacy(self, db_name: str, full_name: str, type_code: str = "") -> dict:
         """
         Legacy collection method - fallback if pipeline fails.
         
@@ -1367,6 +1384,9 @@ class ObjectExplorerView(BaseView):
         info = {
             'database': db_name,
             'full_name': full_name,
+            'object_type_code': str(type_code or "").strip().upper(),
+            'object_type': normalize_object_type(type_code),
+            'object_resolution': {'object_resolved': False, 'object_id': None},
             'source_code': '',
             'stats': {},
             'depends_on': [],
@@ -1394,7 +1414,9 @@ class ObjectExplorerView(BaseView):
             # 1. Source Code
             try:
                 query_source = f"""
-                SELECT CAST(m.definition AS NVARCHAR(MAX)) as source_code
+                SELECT 
+                    o.object_id,
+                    CAST(m.definition AS NVARCHAR(MAX)) as source_code
                 FROM [{db_name}].sys.sql_modules m
                 JOIN [{db_name}].sys.objects o ON m.object_id = o.object_id
                 JOIN [{db_name}].sys.schemas s ON o.schema_id = s.schema_id
@@ -1403,8 +1425,28 @@ class ObjectExplorerView(BaseView):
                 result = active_conn.execute_query(query_source)
                 if result and result[0].get('source_code'):
                     info['source_code'] = result[0]['source_code']
+                    info['object_type'] = normalize_object_type(
+                        info.get('object_type_code'),
+                        source_code=info['source_code'],
+                    )
+                    info['object_resolution'] = {
+                        'object_resolved': True,
+                        'object_id': result[0].get('object_id'),
+                        'database': db_name,
+                        'full_name': full_name,
+                        'object_type': info.get('object_type', ''),
+                        'object_type_code': info.get('object_type_code', ''),
+                    }
                     add_log(f"Source Code: OK ({len(info['source_code'])} chars)")
                 else:
+                    info['object_resolution'] = {
+                        'object_resolved': False,
+                        'object_id': None,
+                        'database': db_name,
+                        'full_name': full_name,
+                        'object_type': info.get('object_type', ''),
+                        'object_type_code': info.get('object_type_code', ''),
+                    }
                     add_log("Source Code: Not found")
             except Exception as e:
                 add_log(f"Source Code: ERROR ({e})")
@@ -1801,14 +1843,21 @@ class ObjectExplorerView(BaseView):
             # Önce SP'nin kullandığı tabloları bul
             tables_query = f"""
             SELECT DISTINCT
-                OBJECT_SCHEMA_NAME(d.referenced_major_id, DB_ID('{db_name}')) AS schema_name,
-                OBJECT_NAME(d.referenced_major_id, DB_ID('{db_name}')) AS table_name
+                COALESCE(
+                    d.referenced_schema_name,
+                    OBJECT_SCHEMA_NAME(d.referenced_id, DB_ID('{db_name}'))
+                ) AS schema_name,
+                COALESCE(
+                    d.referenced_entity_name,
+                    OBJECT_NAME(d.referenced_id, DB_ID('{db_name}'))
+                ) AS table_name
             FROM [{db_name}].sys.sql_expression_dependencies d
             JOIN [{db_name}].sys.objects o ON d.referencing_id = o.object_id
             JOIN [{db_name}].sys.schemas s ON o.schema_id = s.schema_id
+            LEFT JOIN [{db_name}].sys.objects o2 ON d.referenced_id = o2.object_id
             WHERE s.name + '.' + o.name = '{full_name}'
               AND d.referenced_minor_id = 0
-              AND OBJECTPROPERTY(d.referenced_major_id, 'IsUserTable') = 1
+              AND o2.type = 'U'
             """
             tables = conn.execute_query(tables_query)
             if not tables:
@@ -1921,7 +1970,7 @@ class ObjectExplorerView(BaseView):
             JOIN [{db_name}].sys.query_store_runtime_stats_interval rsi 
                 ON rs.runtime_stats_interval_id = rsi.runtime_stats_interval_id
             WHERE q.object_id = OBJECT_ID(:object_full_name)
-              AND rsi.start_time > DATEADD(day, -7, GETDATE())
+              AND rsi.start_time > DATEADD(day, -14, GETDATE())
             """
             variance_result = conn.execute_query(variance_query, {"object_full_name": object_full_name})
             
@@ -1974,7 +2023,7 @@ class ObjectExplorerView(BaseView):
         try:
             object_full_name = f"[{db_name}].{full_name}"
             
-            # Son 7 gün vs önceki 7 gün karşılaştırması
+            # Son 14 gün vs önceki 14 gün karşılaştırması
             trend_query = f"""
             WITH RecentStats AS (
                 SELECT 
@@ -1988,7 +2037,7 @@ class ObjectExplorerView(BaseView):
                 JOIN [{db_name}].sys.query_store_runtime_stats_interval rsi 
                     ON rs.runtime_stats_interval_id = rsi.runtime_stats_interval_id
                 WHERE q.object_id = OBJECT_ID(:object_full_name)
-                  AND rsi.start_time > DATEADD(day, -7, GETDATE())
+                  AND rsi.start_time > DATEADD(day, -14, GETDATE())
             ),
             PreviousStats AS (
                 SELECT 
@@ -2002,7 +2051,7 @@ class ObjectExplorerView(BaseView):
                 JOIN [{db_name}].sys.query_store_runtime_stats_interval rsi 
                     ON rs.runtime_stats_interval_id = rsi.runtime_stats_interval_id
                 WHERE q.object_id = OBJECT_ID(:object_full_name)
-                  AND rsi.start_time BETWEEN DATEADD(day, -14, GETDATE()) AND DATEADD(day, -7, GETDATE())
+                  AND rsi.start_time BETWEEN DATEADD(day, -28, GETDATE()) AND DATEADD(day, -14, GETDATE())
             )
             SELECT 
                 r.avg_duration_ms AS recent_duration,
@@ -2029,8 +2078,8 @@ class ObjectExplorerView(BaseView):
             previous_reads = float(row.get('previous_reads') or 0)
             
             trend = {
-                'recent_period': 'Last 7 days',
-                'previous_period': 'Previous 7 days',
+                'recent_period': 'Last 14 days',
+                'previous_period': 'Previous 14 days',
                 'recent_duration_ms': round(recent_duration, 2),
                 'previous_duration_ms': round(previous_duration, 2),
                 'recent_cpu_ms': round(recent_cpu, 2),
@@ -2121,7 +2170,7 @@ class ObjectExplorerView(BaseView):
                 JOIN [{db_name}].sys.query_store_runtime_stats_interval rsi 
                     ON rs.runtime_stats_interval_id = rsi.runtime_stats_interval_id
                 WHERE q.object_id = OBJECT_ID(:object_full_name)
-                  AND rsi.start_time > DATEADD(day, -7, GETDATE())
+                  AND rsi.start_time > DATEADD(day, -14, GETDATE())
                 """
                 qs_result = conn.execute_query(qs_memory_query, {"object_full_name": object_full_name})
                 if qs_result and qs_result[0]:
@@ -2190,7 +2239,7 @@ class AnalysisOptionsDialog(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("🚀 Analiz Seçenekleri")
+        self.setWindowTitle("🚀 Analysis Options")
         self.setFixedSize(500, 560)
         self.setModal(True)
         
@@ -2209,7 +2258,7 @@ class AnalysisOptionsDialog(QDialog):
         layout.setSpacing(16)
         
         # Header
-        header = QLabel("🚀 Analiz Başlatılıyor")
+        header = QLabel("🚀 Starting Analysis")
         header.setStyleSheet(f"""
             color: {Colors.PRIMARY};
             font-size: 20px;
@@ -2218,7 +2267,7 @@ class AnalysisOptionsDialog(QDialog):
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(header)
         
-        subtitle = QLabel("Lütfen analiz türünü seçin")
+        subtitle = QLabel("Please select analysis mode")
         subtitle.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
@@ -2258,7 +2307,7 @@ class AnalysisOptionsDialog(QDialog):
         self._standard_radio.toggled.connect(self._update_selection_style)
         standard_header.addWidget(self._standard_radio)
         standard_header.addStretch()
-        self._standard_badge = QLabel("Önerilen")
+        self._standard_badge = QLabel("Recommended")
         self._standard_badge.setObjectName("standardBadge")
         self._standard_badge.setStyleSheet(f"""
             QLabel#standardBadge {{
@@ -2274,7 +2323,7 @@ class AnalysisOptionsDialog(QDialog):
         standard_header.addWidget(self._standard_badge)
         standard_layout.addLayout(standard_header)
         
-        self._standard_desc = QLabel("• Hızlı ve verimli analiz\n• Çoğu senaryo için yeterli\n• Normal token kullanımı")
+        self._standard_desc = QLabel("• Fast and efficient analysis\n• Suitable for most scenarios\n• Normal token usage")
         self._standard_desc.setObjectName("standardDesc")
         self._standard_desc.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px; margin-left: 24px; background: transparent; border: none;")
         standard_layout.addWidget(self._standard_desc)
@@ -2331,7 +2380,7 @@ class AnalysisOptionsDialog(QDialog):
         deep_header.addWidget(self._deep_badge)
         deep_layout.addLayout(deep_header)
         
-        self._deep_desc = QLabel("• ~%20 daha yüksek doğruluk\n• Gelişmiş hallucination tespiti\n• Karmaşık SP'ler için ideal")
+        self._deep_desc = QLabel("• ~20% higher accuracy\n• Enhanced hallucination detection\n• Ideal for complex stored procedures")
         self._deep_desc.setObjectName("deepDesc")
         self._deep_desc.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px; margin-left: 24px; background: transparent; border: none;")
         deep_layout.addWidget(self._deep_desc)
@@ -2363,14 +2412,14 @@ class AnalysisOptionsDialog(QDialog):
         warning_icon = QLabel("⚠️")
         warning_icon.setFixedWidth(20)
         warning_layout.addWidget(warning_icon)
-        warning_text = QLabel("Daha uzun sürer ve daha fazla API maliyeti oluşturur")
+        warning_text = QLabel("Runs longer and may increase API cost")
         warning_text.setStyleSheet("color: #92400e; font-size: 11px; background: transparent; border: none;")
         warning_layout.addWidget(warning_text)
         warning_layout.addStretch()
         deep_layout.addWidget(self._deep_warning)
         
         # Deep Analysis Confirmation Checkbox
-        self._deep_confirm_check = QCheckBox("  ONAYLIYORUM - Deep Analysis kullanmak istiyorum")
+        self._deep_confirm_check = QCheckBox("  I CONFIRM - I want to run Deep Analysis")
         self._deep_confirm_check.setObjectName("deepConfirmCheck")
         self._deep_confirm_check.setStyleSheet(f"""
             QCheckBox#deepConfirmCheck {{
@@ -2406,7 +2455,7 @@ class AnalysisOptionsDialog(QDialog):
         cache_layout = QHBoxLayout(cache_frame)
         cache_layout.setContentsMargins(16, 10, 16, 10)
         
-        self._force_refresh_check = QCheckBox("🔄 Force Refresh (Cache'i atla, yeni analiz yap)")
+        self._force_refresh_check = QCheckBox("🔄 Force Refresh (skip cache and run a fresh analysis)")
         self._force_refresh_check.setStyleSheet(f"""
             QCheckBox {{
                 color: {Colors.TEXT_PRIMARY};
@@ -2430,7 +2479,7 @@ class AnalysisOptionsDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(12)
         
-        cancel_btn = QPushButton("İptal")
+        cancel_btn = QPushButton("Cancel")
         cancel_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {Colors.SURFACE};
@@ -2450,7 +2499,7 @@ class AnalysisOptionsDialog(QDialog):
         
         btn_layout.addStretch()
         
-        self._start_btn = QPushButton("▶ Analizi Başlat")
+        self._start_btn = QPushButton("▶ Start Analysis")
         self._start_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {Colors.PRIMARY};
@@ -2522,7 +2571,7 @@ class AnalysisOptionsDialog(QDialog):
             # Deep Analysis requires confirmation
             self._start_btn.setEnabled(self._deep_confirm_check.isChecked())
             if self._deep_confirm_check.isChecked():
-                self._start_btn.setText("🔬 Deep Analysis Başlat")
+                self._start_btn.setText("🔬 Start Deep Analysis")
                 self._start_btn.setStyleSheet(f"""
                     QPushButton {{
                         background-color: #7c3aed;
@@ -2538,11 +2587,11 @@ class AnalysisOptionsDialog(QDialog):
                     }}
                 """)
             else:
-                self._start_btn.setText("▶ Analizi Başlat")
+                self._start_btn.setText("▶ Start Analysis")
         else:
             # Standard Analysis - always enabled
             self._start_btn.setEnabled(True)
-            self._start_btn.setText("▶ Analizi Başlat")
+            self._start_btn.setText("▶ Start Analysis")
             self._start_btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {Colors.PRIMARY};
@@ -2583,6 +2632,8 @@ class AITuneWorker(QThread):
     log = pyqtSignal(str)
     progress = pyqtSignal(int, str)  # (percentage, step_description)
     confidence_ready = pyqtSignal(dict)  # Confidence info dict
+    request_payload_ready = pyqtSignal(dict)  # LLM request payload for export
+    response_chunk = pyqtSignal(str)  # Streaming response chunks for live UI
     
     def __init__(self, object_info: dict, mode: str = "analyze", deep_mode: bool = False, skip_cache: bool = False, parent=None):
         super().__init__(parent)
@@ -2599,6 +2650,40 @@ class AITuneWorker(QThread):
         
         # Store last analysis confidence for potential deep analysis
         self._last_confidence = None
+        self._last_request_payload = None
+
+    def _emit_request_payload_if_available(self, service: Optional["AIAnalysisService"]) -> None:
+        """Emit latest request payload if service has one (even on partial failures)."""
+        if service is None:
+            return
+
+        payload = None
+        try:
+            payload = service.get_last_request_payload()
+        except Exception:
+            payload = None
+
+        # Fallback: if payload missing but request log file exists, load it back.
+        if not payload:
+            try:
+                import json
+                from pathlib import Path
+
+                file_path = service.get_last_request_file_path()
+                if file_path and Path(file_path).exists():
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        payload = loaded
+            except Exception:
+                payload = None
+
+        if isinstance(payload, dict) and payload:
+            self._last_request_payload = payload
+            try:
+                self.request_payload_ready.emit(payload)
+            except Exception:
+                pass
     
     def _on_observer_update(self, percentage: int, message: str) -> None:
         """Callback from ProgressObserver"""
@@ -2621,6 +2706,66 @@ class AITuneWorker(QThread):
             self._emit_log(f"[{percentage}%] {step}")
         except Exception:
             pass
+
+    @staticmethod
+    def _get_ai_timeout_seconds() -> int:
+        """Get AI timeout from settings with safe bounds."""
+        try:
+            from app.core.config import get_settings
+            timeout = int(get_settings().ai.timeout)
+        except Exception:
+            timeout = 120
+        return max(30, min(timeout, 600))
+
+    async def _await_with_heartbeat(
+        self,
+        coro,
+        waiting_message: str,
+        timeout_seconds: Optional[int],
+        heartbeat_seconds: int = 10,
+    ):
+        """
+        Await a coroutine while periodically updating UI/logs so it does not appear stuck.
+        Raises TimeoutError if the operation exceeds timeout_seconds.
+        """
+        import asyncio
+        import contextlib
+        import time
+
+        task = asyncio.create_task(coro)
+        started = time.monotonic()
+
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=heartbeat_seconds)
+                if task in done:
+                    return await task
+
+                elapsed = int(time.monotonic() - started)
+                remaining = max(timeout_seconds - elapsed, 0) if timeout_seconds is not None else None
+
+                try:
+                    current_pct = max(1, int(self._observer.state.percentage))
+                    self.progress.emit(current_pct, f"{waiting_message} ({elapsed}s)")
+                except Exception:
+                    pass
+
+                if timeout_seconds is None:
+                    self._emit_log(f"⏳ Waiting AI response... elapsed={elapsed}s, timeout=disabled (streaming)")
+                else:
+                    self._emit_log(f"⏳ Waiting AI response... elapsed={elapsed}s, timeout_in={remaining}s")
+
+                if timeout_seconds is not None and elapsed >= timeout_seconds:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                    raise TimeoutError(
+                        f"AI request timed out after {timeout_seconds}s. "
+                        "Please verify active provider/model settings."
+                    )
+        finally:
+            if not task.done():
+                task.cancel()
     
     def run(self):
         import asyncio
@@ -2706,6 +2851,7 @@ class AITuneWorker(QThread):
             trend = info.get('historical_trend', {}).get('trend_direction', 'stable')
             self._emit_log(f"Historical Trend: {trend}")
 
+        service: Optional[AIAnalysisService] = None
         try:
             # Step: Building Prompt
             obs.step_started("prompt_building", "✍️ Building AI prompt...")
@@ -2719,28 +2865,60 @@ class AITuneWorker(QThread):
             
             # Step: AI Request
             obs.step_started("ai_request", "🤖 Requesting AI analysis...")
-            
-            response, confidence = await service.analyze_sp(
-                source_code=source_code,
-                object_name=info.get('full_name', 'Object'),
-                stats=info.get('stats'),
-                missing_indexes=info.get('missing_indexes'),
-                dependencies=info.get('depends_on'),
-                query_store=info.get('query_store'),
-                plan_xml=info.get('plan_xml'),
-                plan_meta=info.get('plan_meta'),
-                plan_insights=info.get('plan_insights'),
-                existing_indexes=info.get('existing_indexes'),
-                parameter_sniffing=info.get('parameter_sniffing'),
-                historical_trend=info.get('historical_trend'),
-                memory_grants=info.get('memory_grants'),
-                # Data completeness for graceful degradation
-                completeness=info.get('completeness'),
-                context_warning=info.get('context_warning'),
-                # Analysis mode options
-                deep_analysis=self.deep_mode,
-                skip_cache=self.skip_cache,
+
+            try:
+                provider_ok = await service.llm_client.check_active_connection()
+            except Exception:
+                provider_ok = False
+            if not provider_ok:
+                raise RuntimeError("Active AI provider is not reachable")
+
+            use_streaming = True
+            if use_streaming:
+                self._emit_log("📡 Streaming mode enabled (timeout disabled)")
+
+            def _on_chunk(chunk: str) -> None:
+                if not chunk:
+                    return
+                try:
+                    self.response_chunk.emit(chunk)
+                except Exception:
+                    pass
+
+            ai_timeout = None if use_streaming else self._get_ai_timeout_seconds()
+            response, confidence = await self._await_with_heartbeat(
+                service.analyze_object(
+                    source_code=source_code,
+                    object_name=info.get('full_name', 'Object'),
+                    object_type=info.get('object_type') or info.get('object_type_code') or "",
+                    database_name=info.get('database'),
+                    object_resolution=info.get('object_resolution'),
+                    stats=info.get('stats'),
+                    missing_indexes=info.get('missing_indexes'),
+                    dependencies=info.get('depends_on'),
+                    query_store=info.get('query_store'),
+                    plan_xml=info.get('plan_xml'),
+                    plan_meta=info.get('plan_meta'),
+                    plan_insights=info.get('plan_insights'),
+                    existing_indexes=info.get('existing_indexes'),
+                    parameter_sniffing=info.get('parameter_sniffing'),
+                    historical_trend=info.get('historical_trend'),
+                    memory_grants=info.get('memory_grants'),
+                    # Data completeness for graceful degradation
+                    completeness=info.get('completeness'),
+                    context_warning=info.get('context_warning'),
+                    # Analysis mode options
+                    deep_analysis=self.deep_mode,
+                    skip_cache=self.skip_cache,
+                    streaming=use_streaming,
+                    on_chunk=_on_chunk if use_streaming else None,
+                ),
+                waiting_message="🤖 Streaming AI analysis..." if use_streaming else "🤖 Requesting AI analysis...",
+                timeout_seconds=ai_timeout,
             )
+
+            # Store and emit LLM request payload (also available for cache-hit runs).
+            self._emit_request_payload_if_available(service)
             
             # Store confidence for potential deep analysis
             self._last_confidence = confidence
@@ -2771,7 +2949,10 @@ class AITuneWorker(QThread):
             logger.error(f"AI analysis failed: {e}")
             obs.step_failed("ai_request", str(e))
             self._emit_log(f"Error: {e}")
-            return self._generate_fallback_report()
+            self._emit_request_payload_if_available(service)
+            return f"""⚠️ **AI request failed:** {e}
+
+{self._generate_fallback_report()}"""
     
     async def _generate_optimized_code(self) -> str:
         """
@@ -2808,6 +2989,7 @@ class AITuneWorker(QThread):
         
         obs.step_completed("code_prompt")
         
+        service: Optional[AIAnalysisService] = None
         try:
             # Step: AI Optimization
             obs.step_started("ai_optimization", "🤖 Generating optimized code...")
@@ -2815,22 +2997,39 @@ class AITuneWorker(QThread):
             service = AIAnalysisService()
             provider_name = getattr(service, "provider_id", None) or "active provider"
             self._emit_log(f"AI Provider: {provider_name}")
-            
-            response = await service.optimize_sp(
-                source_code=source_code,
-                object_name=info.get('full_name', 'Object'),
-                stats=info.get('stats'),
-                missing_indexes=info.get('missing_indexes'),
-                dependencies=info.get('depends_on'),
-                query_store=info.get('query_store'),
-                plan_xml=info.get('plan_xml'),
-                plan_meta=info.get('plan_meta'),
-                plan_insights=info.get('plan_insights'),
-                existing_indexes=info.get('existing_indexes'),
-                parameter_sniffing=info.get('parameter_sniffing'),
-                historical_trend=info.get('historical_trend'),
-                memory_grants=info.get('memory_grants'),
+
+            try:
+                provider_ok = await service.llm_client.check_active_connection()
+            except Exception:
+                provider_ok = False
+            if not provider_ok:
+                raise RuntimeError("Active AI provider is not reachable")
+
+            ai_timeout = self._get_ai_timeout_seconds()
+            response = await self._await_with_heartbeat(
+                service.optimize_object(
+                    source_code=source_code,
+                    object_name=info.get('full_name', 'Object'),
+                    object_type=info.get('object_type') or info.get('object_type_code') or "",
+                    database_name=info.get('database'),
+                    object_resolution=info.get('object_resolution'),
+                    stats=info.get('stats'),
+                    missing_indexes=info.get('missing_indexes'),
+                    dependencies=info.get('depends_on'),
+                    query_store=info.get('query_store'),
+                    plan_xml=info.get('plan_xml'),
+                    plan_meta=info.get('plan_meta'),
+                    plan_insights=info.get('plan_insights'),
+                    existing_indexes=info.get('existing_indexes'),
+                    parameter_sniffing=info.get('parameter_sniffing'),
+                    historical_trend=info.get('historical_trend'),
+                    memory_grants=info.get('memory_grants'),
+                ),
+                waiting_message="🤖 Generating optimized code...",
+                timeout_seconds=ai_timeout,
             )
+
+            self._emit_request_payload_if_available(service)
             
             obs.step_completed("ai_optimization", f"✅ Generated {len(response) if response else 0:,} chars")
             
@@ -2849,6 +3048,7 @@ class AITuneWorker(QThread):
             logger.error(f"Optimization failed: {e}")
             obs.step_failed("ai_optimization", str(e))
             self._emit_log(f"Error: {e}")
+            self._emit_request_payload_if_available(service)
             return self._generate_fallback_optimized_code()
     
     def _format_stats(self) -> str:
@@ -2991,6 +3191,9 @@ class AITuneDialog(QDialog):
         self._last_confidence = None
         self._analysis_result = ""
         self._analysis_timestamp = None
+        self._last_llm_request_payload = None
+        self._streaming_started = False
+        self._streaming_buffer = ""
         
         self._setup_ui()
         self._set_idle_state()
@@ -3154,7 +3357,7 @@ class AITuneDialog(QDialog):
         log_title.setStyleSheet("color: #94a3b8; font-weight: 600; font-size: 11px;")
         log_header.addWidget(log_title)
         log_header.addStretch()
-        clear_btn = QPushButton("Temizle")
+        clear_btn = QPushButton("Clear")
         clear_btn.setFixedHeight(22)
         clear_btn.setStyleSheet("""
             QPushButton {
@@ -3252,7 +3455,7 @@ class AITuneDialog(QDialog):
         # Buttons
         btn_layout = QHBoxLayout()
 
-        self._start_btn = QPushButton("▶ Analizi Baslat")
+        self._start_btn = QPushButton("▶ Start Analysis")
         self._start_btn.clicked.connect(self._start_analysis)
         btn_layout.addWidget(self._start_btn)
 
@@ -3267,12 +3470,17 @@ class AITuneDialog(QDialog):
         self._save_btn.clicked.connect(self._save_report)
         btn_layout.addWidget(self._save_btn)
 
-        self._copy_btn = QPushButton("📋 Metni Kopyala")
+        self._save_llm_payload_btn = QPushButton("🧾 Save LLM Request")
+        self._save_llm_payload_btn.setEnabled(False)
+        self._save_llm_payload_btn.clicked.connect(self._save_llm_request_payload)
+        btn_layout.addWidget(self._save_llm_payload_btn)
+
+        self._copy_btn = QPushButton("📋 Copy Text")
         self._copy_btn.setEnabled(False)
         self._copy_btn.clicked.connect(self._copy_report)
         btn_layout.addWidget(self._copy_btn)
         
-        self._close_btn = QPushButton("Kapat")
+        self._close_btn = QPushButton("Close")
         self._close_btn.setObjectName("closeBtn")
         self._close_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self._close_btn)
@@ -3297,7 +3505,7 @@ class AITuneDialog(QDialog):
         """)
         self._result_text.setMarkdown("""## ℹ️ Analysis Not Started
 
-Click **▶ Analizi Başlat** to run a comprehensive performance analysis.
+Click **▶ Start Analysis** to run a comprehensive performance analysis.
 
 ### What will be analyzed:
 - 📄 Source code review
@@ -3330,9 +3538,13 @@ The AI will provide detailed optimization recommendations based on all collected
         self._start_btn.setEnabled(False)
         self._refresh_btn.setEnabled(False)
         self._save_btn.setEnabled(False)
+        self._save_llm_payload_btn.setEnabled(False)
         self._copy_btn.setEnabled(False)
         self._deep_analysis_btn.setVisible(False)
         self._confidence_badge.setVisible(False)
+        self._last_llm_request_payload = None
+        self._streaming_started = False
+        self._streaming_buffer = ""
         
         mode_label = "🔬 Deep Analysis" if deep_mode else "🔄 Standard Analysis"
         cache_info = " (Force Refresh)" if skip_cache else ""
@@ -3370,6 +3582,8 @@ The AI will provide detailed optimization recommendations based on all collected
         self._analysis_worker.log.connect(self._add_log)
         self._analysis_worker.progress.connect(self._on_progress_update)
         self._analysis_worker.confidence_ready.connect(self._on_confidence_ready)
+        self._analysis_worker.request_payload_ready.connect(self._on_request_payload_ready)
+        self._analysis_worker.response_chunk.connect(self._on_response_chunk)
         self._analysis_worker.start()
     
     def _run_deep_analysis(self):
@@ -3437,13 +3651,46 @@ The AI will provide detailed optimization recommendations based on all collected
             self._add_log("⚠️ Validation warnings:")
             for w in warnings[:3]:
                 self._add_log(f"  - {w}")
+
+    def _on_request_payload_ready(self, payload: dict):
+        """Store latest LLM request payload for manual export."""
+        if isinstance(payload, dict) and payload:
+            self._last_llm_request_payload = payload
+            self._save_llm_payload_btn.setEnabled(True)
+            self._add_log("🧾 LLM request payload is ready. Use 'Save LLM Request' to export it.")
+
+    def _on_response_chunk(self, chunk: str) -> None:
+        """Render streaming response chunks in result area while analysis is running."""
+        if not chunk:
+            return
+        if not self._streaming_started:
+            self._streaming_started = True
+            self._streaming_buffer = ""
+            self._result_text.clear()
+        self._streaming_buffer += chunk
+        self._result_text.setPlainText(self._streaming_buffer)
+        scrollbar = self._result_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _sync_llm_payload_from_worker(self) -> None:
+        """Recover payload from worker when signal ordering/race causes missing UI state."""
+        if isinstance(self._last_llm_request_payload, dict) and self._last_llm_request_payload:
+            return
+        worker = getattr(self, "_analysis_worker", None)
+        payload = getattr(worker, "_last_request_payload", None) if worker is not None else None
+        if isinstance(payload, dict) and payload:
+            self._last_llm_request_payload = payload
     
     def _on_analysis_complete(self, result: str):
+        self._streaming_started = False
+        self._streaming_buffer = ""
+        self._sync_llm_payload_from_worker()
         self._analysis_result = result
         self._result_text.setMarkdown(result)
         self._refresh_btn.setEnabled(True)
         self._start_btn.setEnabled(True)
         self._save_btn.setEnabled(True)
+        self._save_llm_payload_btn.setEnabled(bool(self._last_llm_request_payload))
         self._copy_btn.setEnabled(True)
         
         self._status_label.setText("✅ Analysis completed successfully")
@@ -3461,12 +3708,18 @@ The AI will provide detailed optimization recommendations based on all collected
         
         self._add_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         self._add_log("✅ Analysis completed successfully!")
+        if not self._last_llm_request_payload:
+            self._add_log("ℹ️ No LLM request payload is available (result may be served from cache).")
     
     def _on_error(self, error: str):
+        self._streaming_started = False
+        self._streaming_buffer = ""
+        self._sync_llm_payload_from_worker()
         self._analysis_result = ""
         self._result_text.setMarkdown(f"## ❌ Error\n\n{error}\n\n---\n\n*Please check the logs for more details.*")
         self._refresh_btn.setEnabled(True)
         self._start_btn.setEnabled(True)
+        self._save_llm_payload_btn.setEnabled(bool(self._last_llm_request_payload))
         
         self._status_label.setText(f"❌ Error: {error[:80]}...")
         self._progress_bar.setValue(0)
@@ -3483,6 +3736,8 @@ The AI will provide detailed optimization recommendations based on all collected
         
         self._add_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         self._add_log(f"❌ ERROR: {error}")
+        if self._last_llm_request_payload:
+            self._add_log("🧾 Analysis failed, but LLM request payload is available and can be saved.")
 
     def _add_log(self, message: str) -> None:
         from datetime import datetime
@@ -3551,6 +3806,42 @@ The AI will provide detailed optimization recommendations based on all collected
             self._add_log(f"Report saved: {file_path}")
         except Exception as e:
             QMessageBox.warning(self, "Report", f"Failed to save report: {e}")
+
+    def _save_llm_request_payload(self) -> None:
+        """Save the request payload sent to LLM as JSON."""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from datetime import datetime
+        import json
+
+        payload = self._last_llm_request_payload
+        if not payload:
+            QMessageBox.information(
+                self,
+                "LLM Request",
+                "No LLM request payload is available to save for this analysis.\n"
+                "Note: The result may be from cache (no LLM request may have been sent).",
+            )
+            return
+
+        object_name = self.object_info.get('full_name', 'Unknown')
+        safe_name = object_name.replace('.', '_').replace('[', '').replace(']', '')
+        default_name = f"LLM_Request_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save LLM Request Payload",
+            default_name,
+            "JSON (*.json)"
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+            self._add_log(f"LLM request payload saved: {file_path}")
+        except Exception as e:
+            QMessageBox.warning(self, "LLM Request", f"Save failed: {e}")
     
     def _markdown_to_html(self, markdown_text: str) -> str:
         """

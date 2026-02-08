@@ -21,17 +21,17 @@ class AIAnalysisWorker(QThread):
         """Analizi başlatır"""
         try:
             # Stage: Context hazırlanıyor
-            self.progress.emit('context', 'Sorgu bağlamı hazırlanıyor...')
+            self.progress.emit('context', 'Preparing query context...')
             
             # Async servisi senkron QThread içinde çalıştırmak için yeni bir event loop kullanıyoruz
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
             # Stage: AI servisine bağlanılıyor
-            self.progress.emit('connect', 'AI servisine bağlanılıyor...')
+            self.progress.emit('connect', 'Connecting to AI service...')
             
             # Stage: Analiz ediliyor
-            self.progress.emit('analyze', 'Sorgu analiz ediliyor...')
+            self.progress.emit('analyze', 'Analyzing query...')
             
             if self.query_stats:
                 result = loop.run_until_complete(
@@ -39,7 +39,7 @@ class AIAnalysisWorker(QThread):
                 )
             elif self._context:
                 # Context-based analysis için basit prompt
-                self.progress.emit('metrics', 'Metrikler değerlendiriliyor...')
+                self.progress.emit('metrics', 'Evaluating metrics...')
                 result = loop.run_until_complete(
                     self._analyze_from_context()
                 )
@@ -47,10 +47,10 @@ class AIAnalysisWorker(QThread):
                 raise ValueError("No query_stats or context provided")
             
             # Stage: Optimizasyon önerileri
-            self.progress.emit('optimize', 'Optimizasyon önerileri hazırlanıyor...')
+            self.progress.emit('optimize', 'Preparing optimization recommendations...')
 
             # Stage: Formatlanıyor
-            self.progress.emit('format', 'Sonuç formatlanıyor...')
+            self.progress.emit('format', 'Formatting results...')
             
             self.finished.emit(result)
             loop.close()

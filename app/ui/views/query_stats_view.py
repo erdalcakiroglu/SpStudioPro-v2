@@ -16,7 +16,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QPropertyAnimation, QEas
 from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QColor, QPen
 
 from app.ui.views.base_view import BaseView
-from app.ui.theme import Colors, create_circle_stat_card
+from app.ui.theme import Colors, create_circle_stat_card, Theme as ThemeStyles
 from app.core.logger import get_logger
 from app.services.query_stats_service import QueryStatsService
 from app.models.query_stats_models import (
@@ -95,7 +95,7 @@ class LoadingOverlay(QWidget):
         layout.addWidget(self._spinner, alignment=Qt.AlignmentFlag.AlignCenter)
         
         # Loading text
-        self._label = QLabel("Yükleniyor...")
+        self._label = QLabel("Loading...")
         self._label.setStyleSheet(f"""
             QLabel {{
                 color: {Colors.TEXT_SECONDARY};
@@ -299,37 +299,7 @@ class QueryStatsView(BaseView):
     
     def _get_combo_style(self) -> str:
         """Get ComboBox style - GUI-05 style"""
-        return f"""
-            QComboBox {{
-                border: 1px solid {Colors.BORDER};
-                border-radius: 4px;
-                padding: 6px 8px;
-                font-size: 11px;
-                background-color: {Colors.SURFACE};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-            QComboBox:hover {{
-                border-color: {Colors.PRIMARY};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {Colors.TEXT_SECONDARY};
-                margin-right: 6px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {Colors.SURFACE};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 4px;
-                selection-background-color: {Colors.PRIMARY_LIGHT};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-        """
+        return ThemeStyles.combobox_style()
     
     def _add_query_item(self, query: QueryStats) -> None:
         """Add a query item to the list - GUI-05 style"""
@@ -402,7 +372,7 @@ class QueryStatsView(BaseView):
         
         # Warning message if problem
         if has_warning:
-            warning_label = QLabel("⚠  Çoklu plan tespit edildi - Parametre sniffing olası")
+            warning_label = QLabel("⚠  Multiple plans detected - possible parameter sniffing")
             warning_label.setStyleSheet("""
                 QLabel {
                     color: #ea580c;
@@ -506,7 +476,7 @@ class QueryStatsView(BaseView):
         if hasattr(self, '_loading_overlay'):
             self._loading_overlay.setGeometry(self.rect())
     
-    def _show_loading(self, message: str = "Yükleniyor..."):
+    def _show_loading(self, message: str = "Loading..."):
         """Show loading overlay"""
         self._loading_overlay.set_text(message)
         self._loading_overlay.setGeometry(self.rect())
@@ -538,12 +508,12 @@ class QueryStatsView(BaseView):
         
         # Check connection
         if not self._service.is_connected:
-            self._show_placeholder("Lütfen önce bir veritabanına bağlanın.")
+            self._show_placeholder("Please connect to a database first.")
             logger.debug("Query stats refresh skipped: No active connection")
             return
         
         # Show loading
-        self._show_loading("Sorgular yükleniyor...")
+        self._show_loading("Loading queries...")
         
         # Build filter
         duration_map = {0: 1, 1: 7, 2: 30}
@@ -564,7 +534,7 @@ class QueryStatsView(BaseView):
             self._hide_loading()
             
             if not self._queries:
-                self._show_placeholder("Bu filtreye uygun sorgu bulunamadı.")
+                self._show_placeholder("No queries matched this filter.")
                 return
             
             for query in self._queries:
@@ -575,7 +545,7 @@ class QueryStatsView(BaseView):
         except Exception as e:
             self._hide_loading()
             logger.error(f"Failed to load queries: {e}")
-            self._show_placeholder(f"Sorgu yüklenirken hata oluştu: {str(e)}")
+            self._show_placeholder(f"Error loading queries: {str(e)}")
     
     def _show_placeholder(self, message: str) -> None:
         """Show placeholder message in list"""
@@ -994,4 +964,4 @@ class QueryDetailDialog(QDialog):
             QMessageBox.information(self, "AI Analysis", "AI analysis module not available.")
         except Exception as e:
             logger.error(f"AI analysis error: {e}")
-            QMessageBox.warning(self, "Hata", f"AI analizi başarısız: {e}")
+            QMessageBox.warning(self, "Error", f"AI analysis failed: {e}")

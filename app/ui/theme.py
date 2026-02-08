@@ -403,35 +403,56 @@ class Theme:
         """ComboBox stili"""
         return f"""
             QComboBox {{
-                background-color: {Colors.CARD_BG};
+                background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.BORDER};
                 border-radius: 8px;
-                padding: 8px 12px;
+                padding: 6px 10px;
                 color: {Colors.TEXT_PRIMARY};
                 font-size: {cls.FONT_BASE};
-                min-height: 20px;
+                min-height: 22px;
             }}
             QComboBox:hover {{
+                border-color: {Colors.PRIMARY};
+                color: {Colors.TEXT_PRIMARY};
+            }}
+            QComboBox:focus {{
                 border-color: {Colors.PRIMARY};
             }}
             QComboBox::drop-down {{
                 border: none;
-                width: 24px;
+                width: 22px;
             }}
             QComboBox::down-arrow {{
                 image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid {Colors.TEXT_SECONDARY};
-                margin-right: 8px;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid {Colors.TEXT_SECONDARY};
+                margin-right: 6px;
             }}
             QComboBox QAbstractItemView {{
-                background-color: {Colors.CARD_BG};
+                background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.BORDER};
                 border-radius: 8px;
                 selection-background-color: {Colors.PRIMARY_LIGHT};
                 selection-color: {Colors.TEXT_PRIMARY};
+                color: {Colors.TEXT_PRIMARY};
                 padding: 4px;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 6px 10px;
+                color: {Colors.TEXT_PRIMARY};
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {Colors.PRIMARY_LIGHT};
+                color: {Colors.TEXT_PRIMARY};
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: {Colors.PRIMARY};
+                color: #ffffff;
+            }}
+            QComboBox:disabled {{
+                background-color: #f3f4f6;
+                color: {Colors.TEXT_MUTED};
             }}
         """
     
@@ -829,18 +850,31 @@ QMenu::item:selected {{
 QComboBox {{
     background-color: {c['bg_input']};
     border: 1px solid {c['border_primary']};
-    border-radius: 6px;
-    padding: 8px 12px;
+    border-radius: 8px;
+    padding: 6px 10px;
     color: {c['text_primary']};
 }}
 
 QComboBox:hover {{
     border-color: {c['border_focus']};
+    color: {c['text_primary']};
+}}
+
+QComboBox:focus {{
+    border-color: {c['border_focus']};
 }}
 
 QComboBox::drop-down {{
     border: none;
-    padding-right: 8px;
+    width: 22px;
+}}
+
+QComboBox::down-arrow {{
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {c['text_secondary']};
+    margin-right: 6px;
 }}
 
 QComboBox QAbstractItemView {{
@@ -848,6 +882,29 @@ QComboBox QAbstractItemView {{
     border: 1px solid {c['border_primary']};
     border-radius: 8px;
     selection-background-color: {c['bg_selected']};
+    selection-color: #ffffff;
+    color: {c['text_primary']};
+    padding: 4px;
+}}
+
+QComboBox QAbstractItemView::item {{
+    color: {c['text_primary']};
+    padding: 6px 10px;
+}}
+
+QComboBox QAbstractItemView::item:hover {{
+    background-color: {c['bg_hover']};
+    color: {c['text_primary']};
+}}
+
+QComboBox QAbstractItemView::item:selected {{
+    background-color: {c['bg_selected']};
+    color: #ffffff;
+}}
+
+QComboBox:disabled {{
+    background-color: {c['bg_tertiary']};
+    color: {c['text_disabled']};
 }}
 
 /* === Progress Bar === */
@@ -1252,35 +1309,61 @@ QComboBox {{
     background-color: {c['bg_input']};
     border: 1px solid {c['border_primary']};
     border-radius: 8px;
-    padding: 6px 12px;
+    padding: 6px 10px;
     color: {c['text_primary']};
-    min-height: 20px;
+    min-height: 22px;
 }}
 
 QComboBox:hover {{
+    border-color: {c['accent_primary']};
+    color: {c['text_primary']};
+}}
+
+QComboBox:focus {{
     border-color: {c['accent_primary']};
 }}
 
 QComboBox::drop-down {{
     border: none;
-    width: 24px;
+    width: 22px;
 }}
 
 QComboBox::down-arrow {{
     image: none;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid {c['text_secondary']};
-    margin-right: 8px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {c['text_secondary']};
+    margin-right: 6px;
 }}
 
 QComboBox QAbstractItemView {{
     background-color: {c['bg_secondary']};
     border: 1px solid {c['border_primary']};
     border-radius: 8px;
-    selection-background-color: {c['bg_hover']};
-    selection-color: {c['text_primary']};
+    selection-background-color: {c['bg_selected']};
+    selection-color: #ffffff;
+    color: {c['text_primary']};
     padding: 4px;
+}}
+
+QComboBox QAbstractItemView::item {{
+    color: {c['text_primary']};
+    padding: 6px 10px;
+}}
+
+QComboBox QAbstractItemView::item:hover {{
+    background-color: {c['bg_hover']};
+    color: {c['text_primary']};
+}}
+
+QComboBox QAbstractItemView::item:selected {{
+    background-color: {c['bg_selected']};
+    color: #ffffff;
+}}
+
+QComboBox:disabled {{
+    background-color: {c['bg_tertiary']};
+    color: {c['text_disabled']};
 }}
 
 /* === GroupBox === */
@@ -1469,7 +1552,7 @@ class CircleStatCard(QFrame):
     
     def _setup_ui(self, title: str, value: str, accent: str):
         self.setStyleSheet("background-color: transparent; border: none;")
-        self.setFixedSize(100, 115)  # Fixed size for consistent layout
+        self.setFixedSize(108, 124)  # Fixed size for consistent layout (+8%)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 0, 5, 0)
@@ -1478,12 +1561,12 @@ class CircleStatCard(QFrame):
         
         # Circle
         self._circle = QFrame()
-        self._circle.setFixedSize(90, 90)
+        self._circle.setFixedSize(98, 98)
         self._circle.setStyleSheet(f"""
             QFrame {{
                 background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.BORDER};
-                border-radius: 45px;
+                border-radius: 49px;
             }}
         """)
         circle_layout = QVBoxLayout(self._circle)
@@ -1500,7 +1583,9 @@ class CircleStatCard(QFrame):
         
         # Title label
         self._title_label = QLabel(title)
-        self._title_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent;")
+        self._title_label.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: 700; background: transparent;"
+        )
         self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_label.setWordWrap(True)
         

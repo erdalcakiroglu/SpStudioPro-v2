@@ -654,14 +654,14 @@ class PlanParser:
     def _get_warning_message(self, warning_type: str, elem: ET.Element) -> str:
         """Uyarı mesajı oluştur"""
         messages = {
-            "NoJoinPredicate": "Join operatöründe predicate eksik - Cartesian product olabilir",
-            "SpillToTempDb": "TempDB'ye veri yazıldı - Memory grant yetersiz",
-            "ColumnsWithNoStatistics": "İstatistik eksik kolonlar var",
-            "PlanAffectingConvert": "Implicit conversion plan'ı olumsuz etkiliyor",
-            "UnmatchedIndexes": "Kullanılmayan index referansları var",
+            "NoJoinPredicate": "Join predicate is missing - may result in a Cartesian product",
+            "SpillToTempDb": "Spill to TempDB occurred - memory grant may be insufficient",
+            "ColumnsWithNoStatistics": "Columns without statistics were detected",
+            "PlanAffectingConvert": "Implicit conversion is negatively affecting the plan",
+            "UnmatchedIndexes": "Unmatched/unused index references were detected",
         }
         
-        return messages.get(warning_type, f"Uyarı: {warning_type}")
+        return messages.get(warning_type, f"Warning: {warning_type}")
     
     def _parse_missing_indexes(self, stmt: ET.Element, ns: dict) -> List[MissingIndex]:
         """Missing index önerilerini parse et"""

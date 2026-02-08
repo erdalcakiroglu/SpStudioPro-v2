@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from app.ui.views.base_view import BaseView
-from app.ui.theme import Colors
+from app.ui.theme import Colors, Theme as ThemeStyles
 from app.core.logger import get_logger
 from app.database.connection import get_connection_manager
 
@@ -49,8 +49,9 @@ class MetricCard(QFrame):
         """)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        # Compact spacing to help the full dashboard fit without vertical scrolling.
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
         
         # Title and help button layout
         title_layout = QHBoxLayout()
@@ -93,7 +94,10 @@ class MetricCard(QFrame):
         
         # Value label
         self.value_label = QLabel(value)
-        self.value_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 24px; font-weight: 600;")
+        # Add a touch of bottom padding to avoid glyph descenders getting clipped on some DPI/font combos.
+        self.value_label.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; font-size: 24px; font-weight: 600; padding-bottom: 2px;"
+        )
         layout.addWidget(self.value_label)
         
         # Unit label
@@ -107,7 +111,8 @@ class MetricCard(QFrame):
         layout.addStretch()
         
         # Sizing
-        self.setMinimumHeight(100)
+        # Slightly taller to avoid clipping at some DPI settings.
+        self.setMinimumHeight(108)
     
     def _show_help(self):
         """Show help dialog."""
@@ -190,8 +195,9 @@ class DashboardView(BaseView):
         main_widget = QWidget()
         main_widget.setStyleSheet("background: transparent;")
         main_layout = QVBoxLayout(main_widget)
-        main_layout.setContentsMargins(32, 24, 32, 24)
-        main_layout.setSpacing(16)
+        # Compact overall padding/spacing so the full dashboard can fit without vertical scrolling.
+        main_layout.setContentsMargins(24, 18, 24, 18)
+        main_layout.setSpacing(12)
         
         # Header row with title and refresh controls
         header_row = QHBoxLayout()
@@ -220,34 +226,7 @@ class DashboardView(BaseView):
         self._cmb_refresh_rate.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._cmb_refresh_rate.addItems(["5s", "15s", "30s", "60s"])
         self._cmb_refresh_rate.setCurrentIndex(1)  # Default 15s
-        self._cmb_refresh_rate.setStyleSheet(f"""
-            QComboBox {{
-                border: 1px solid {Colors.BORDER};
-                border-radius: 6px;
-                padding: 4px 8px;
-                font-size: 11px;
-                background-color: {Colors.SURFACE};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {Colors.TEXT_SECONDARY};
-                margin-right: 6px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {Colors.SURFACE};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 6px;
-                selection-background-color: {Colors.PRIMARY_LIGHT};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-        """)
+        self._cmb_refresh_rate.setStyleSheet(ThemeStyles.combobox_style())
         self._cmb_refresh_rate.currentIndexChanged.connect(self._on_refresh_rate_changed)
         header_row.addWidget(self._cmb_refresh_rate)
         
@@ -308,11 +287,10 @@ class DashboardView(BaseView):
         scroll_widget.setStyleSheet("background-color: transparent;")
         scroll_layout = QVBoxLayout(scroll_widget)
         scroll_layout.setContentsMargins(0, 0, 0, 0)
-        scroll_layout.setSpacing(16)
+        scroll_layout.setSpacing(12)
         
-        # Performance Metrics Section - 4x4 Grid
-        metrics_grid = self._create_metrics_grid()
-        scroll_layout.addLayout(metrics_grid)
+        # Grouped Metrics Sections (keep MetricCard look; change only grouping/layout)
+        self._create_metrics_sections(scroll_layout)
         
         scroll_layout.addStretch()
         scroll.setWidget(scroll_widget)
@@ -320,52 +298,289 @@ class DashboardView(BaseView):
         
         self._main_layout.addWidget(main_widget)
     
-    def _create_metrics_grid(self) -> QGridLayout:
-        """Create performance metrics grid - GUI-05 style (4x4)"""
-        # Metrics data: (key, title, unit, help_text)
-        metrics_data = [
-            # Row 1
-            ("active_sessions", "Active Sessions", "", "Number of currently active sessions connected to the database."),
-            ("os_cpu", "OS Total CPU %", "%", "Total CPU usage percentage across all processors on the operating system."),
-            ("sql_cpu", "SQL Process CPU %", "%", "CPU usage percentage for the SQL Server process specifically."),
-            ("os_memory", "Available OS Memory (MB)", "MB", "Amount of free memory available in megabytes on the operating system."),
-            
-            # Row 2
-            ("ple", "PLE (sec)", "sec", "Page Life Expectancy - average time a page stays in the buffer pool (higher is better)."),
-            ("buffer_cache", "Buffer Cache Hit Ratio %", "%", "Percentage of page requests found in buffer cache without disk I/O."),
-            ("batch_requests", "Batch Requests / sec", "req/s", "Number of batch requests received per second."),
-            ("transactions", "Transactions / sec (avg)", "tx/s", "Average committed transactions per second over the last refresh interval."),
-            
-            # Row 3
-            ("io_read_latency", "IO Read Latency (ms)", "ms", "Average time in milliseconds for a read operation to complete."),
-            ("io_write_latency", "IO Write Latency (ms)", "ms", "Average time in milliseconds for a write operation to complete."),
-            ("log_write_latency", "Log Write Latency (ms)", "ms", "Average time in milliseconds for transaction log writes to complete."),
-            ("signal_wait", "Signal Wait %", "%", "Percentage of time threads spent waiting for CPU (scheduler inefficiency)."),
-            
-            # Row 4
-            ("blocked_sessions", "Blocked Sessions", "", "Number of sessions currently blocked waiting for a resource."),
-            ("runnable_tasks", "Runnable Tasks", "", "Number of tasks waiting to run on the scheduler."),
-            ("tempdb_log_used", "TempDB Log Used %", "%", "Percentage of temporary database transaction log currently in use."),
-            ("blocking", "Blocking", "", "SPID of the session currently blocking another session (0 if none)."),
-        ]
-        
-        grid = QGridLayout()
-        grid.setSpacing(12)
-        
-        for idx, (key, title, unit, help_text) in enumerate(metrics_data):
-            card = MetricCard(title, "0", unit, help_text)
-            self._metric_cards[key] = card
-            row = idx // 4
-            col = idx % 4
-            grid.addWidget(card, row, col)
-        
-        # Set equal column stretch
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
-        grid.setColumnStretch(3, 1)
-        
-        return grid
+    def _create_metrics_sections(self, parent_layout: QVBoxLayout) -> None:
+        """Create grouped metric sections in the requested order (cards unchanged)."""
+
+        def add_section(title: str, metrics_data: list[tuple[str, str, str, str]]) -> None:
+            section_widget = QWidget()
+            section_widget.setStyleSheet("background: transparent;")
+            section_layout = QVBoxLayout(section_widget)
+            section_layout.setContentsMargins(0, 0, 0, 0)
+            section_layout.setSpacing(4)
+
+            header = QLabel(title)
+            header.setStyleSheet(
+                f"color: {Colors.TEXT_SECONDARY}; font-size: 12px; font-weight: 800; letter-spacing: 0.5px;"
+            )
+            section_layout.addWidget(header)
+
+            grid = QGridLayout()
+            # Use spacer columns to shrink card width (~-10%) while keeping layout responsive.
+            grid.setHorizontalSpacing(0)
+            grid.setVerticalSpacing(10)
+
+            for idx, (key, card_title, unit, help_text) in enumerate(metrics_data):
+                card = MetricCard(card_title, "0", unit, help_text)
+                self._metric_cards[key] = card
+                row = idx // 4
+                col = (idx % 4) * 2  # 0,2,4,6 (leave 1,3,5 as spacer columns)
+                grid.addWidget(card, row, col)
+
+            # Card columns: 9, spacer columns: 1  => each card becomes ~10% narrower.
+            for c in (0, 2, 4, 6):
+                grid.setColumnStretch(c, 9)
+            for c in (1, 3, 5):
+                grid.setColumnStretch(c, 1)
+
+            section_layout.addLayout(grid)
+            parent_layout.addWidget(section_widget)
+
+        # 1) SERVER HEALTH
+        add_section(
+            "SERVER HEALTH",
+            [
+                (
+                    "os_cpu",
+                    "CPU %",
+                    "%",
+                    "Overall OS CPU utilization (all cores).\n\n"
+                    "Use this to understand whether the host is CPU-bound. If OS CPU is high but SQL CPU is low, "
+                    "the pressure may be coming from another process. Sustained >80-90% typically indicates CPU pressure.",
+                ),
+                (
+                    "sql_cpu",
+                    "SQL CPU %",
+                    "%",
+                    "SQL Server process CPU utilization.\n\n"
+                    "Helps answer: 'Is SQL Server the main CPU consumer?'. Compare with OS CPU. "
+                    "Sustained high SQL CPU usually correlates with CPU-heavy queries, excessive parallelism, or high compilation.",
+                ),
+                (
+                    "active_sessions",
+                    "Active Sessions",
+                    "",
+                    "Count of active user sessions (non-system).\n\n"
+                    "A sudden increase can indicate connection storms, long-running requests, or application pooling issues. "
+                    "Use together with Top Queries / Blocking to pinpoint the cause.",
+                ),
+                (
+                    "runnable_queue",
+                    "Runnable Queue",
+                    "",
+                    "CPU scheduler pressure (SOS scheduler contention).\n\n"
+                    "Computed as: SUM(max(current_tasks_count - active_workers_count, 0)) across VISIBLE ONLINE schedulers "
+                    "from sys.dm_os_schedulers.\n\n"
+                    "Non-zero means there are workers ready to run but not getting CPU. Sustained values (e.g., >5) are a strong "
+                    "signal of a real CPU bottleneck.",
+                ),
+            ],
+        )
+
+        # 2) MEMORY HEALTH
+        add_section(
+            "MEMORY HEALTH",
+            [
+                (
+                    "total_memory",
+                    "Total Memory",
+                    "MB",
+                    "SQL Server Total Server Memory (MB).\n\n"
+                    "This is the current amount of memory SQL Server has committed for its memory manager "
+                    "(perf counter: 'Total Server Memory (KB)').\n\n"
+                    "In steady state it usually approaches Target Memory. If it stays far below Target, "
+                    "SQL may be under external memory pressure or constrained by configuration (e.g., max server memory).",
+                ),
+                (
+                    "target_memory",
+                    "Target Memory",
+                    "MB",
+                    "SQL Server Target Server Memory (MB).\n\n"
+                    "This is how much memory SQL Server wants to use based on current conditions "
+                    "(perf counter: 'Target Server Memory (KB)').\n\n"
+                    "If Target is low relative to the host, review 'max server memory' and OS memory pressure. "
+                    "If Total is close to Target but PLE is low, workload may be churning the buffer pool.",
+                ),
+                (
+                    "ple",
+                    "PLE",
+                    "sec",
+                    "Page Life Expectancy (seconds).\n\n"
+                    "Approximate time a data page stays in the buffer pool. Higher is generally better, but the 'right' value "
+                    "depends on RAM size and workload.\n\n"
+                    "Sharp drops usually indicate buffer churn (large scans, memory grants, or external memory pressure).",
+                ),
+                (
+                    "buffer_cache",
+                    "Buffer Hit Ratio",
+                    "%",
+                    "Buffer Cache Hit Ratio (%).\n\n"
+                    "Derived from Buffer Manager performance counters. It represents how often pages are served from memory "
+                    "instead of disk.\n\n"
+                    "Typically >95% in many OLTP workloads, but trends matter more than a single snapshot. "
+                    "Use with PLE and IO latency to understand read pressure.",
+                ),
+            ],
+        )
+
+        # 3) WORKLOAD (Failed Logins intentionally removed)
+        add_section(
+            "WORKLOAD",
+            [
+                (
+                    "batch_requests",
+                    "Batch/sec",
+                    "req/s",
+                    "Batch Requests/sec (throughput).\n\n"
+                    "Computed from the cumulative 'Batch Requests/sec' performance counter using delta/time "
+                    "over the current refresh interval.\n\n"
+                    "Use this as a high-level workload intensity signal. Sudden spikes often correlate with CPU/IO increases.",
+                ),
+                (
+                    "transactions",
+                    "Transactions/sec",
+                    "tx/s",
+                    "Transactions/sec (throughput).\n\n"
+                    "Computed from the cumulative 'Transactions/sec' performance counter using delta/time "
+                    "over the current refresh interval.\n\n"
+                    "Helpful to compare with Batch/sec to understand how many requests are truly transactional.",
+                ),
+                (
+                    "compilations",
+                    "Compilations/sec",
+                    "c/s",
+                    "SQL Compilations/sec.\n\n"
+                    "Computed from the cumulative 'SQL Compilations/sec' counter using delta/time.\n\n"
+                    "High compilations relative to Batch/sec can indicate ad-hoc queries, missing parameterization, "
+                    "or excessive plan cache churn. This can drive CPU usage without increasing throughput.",
+                ),
+                (
+                    "recompilations",
+                    "Recomp/sec",
+                    "rc/s",
+                    "SQL Re-Compilations/sec.\n\n"
+                    "Computed from the cumulative 'SQL Re-Compilations/sec' counter using delta/time.\n\n"
+                    "Recompiles can be caused by statistics changes, temp table usage, schema changes, or RECOMPILE hints. "
+                    "Consistently high recompiles are worth investigating as they add CPU overhead.",
+                ),
+            ],
+        )
+
+        # 4) IO
+        add_section(
+            "IO",
+            [
+                (
+                    "io_read_latency",
+                    "IO Read Latency",
+                    "ms",
+                    "Average read latency in milliseconds.\n\n"
+                    "Calculated from sys.dm_io_virtual_file_stats as (io_stall_read_ms / num_of_reads) and averaged.\n\n"
+                    "Rough guidance: <5ms is excellent, 5-20ms is moderate, >20ms often indicates storage pressure "
+                    "(or a workload generating random reads).",
+                ),
+                (
+                    "io_write_latency",
+                    "IO Write Latency",
+                    "ms",
+                    "Average write latency in milliseconds.\n\n"
+                    "Calculated from sys.dm_io_virtual_file_stats as (io_stall_write_ms / num_of_writes) and averaged.\n\n"
+                    "Sustained high write latency can impact checkpoint, tempdb activity, and overall throughput. "
+                    "Correlate with Log Write Latency and wait types like WRITELOG / PAGEIOLATCH_*.",
+                ),
+                (
+                    "log_write_latency",
+                    "Log Write Latency",
+                    "ms",
+                    "Average transaction log write latency in milliseconds.\n\n"
+                    "Calculated from sys.dm_io_virtual_file_stats for LOG files only.\n\n"
+                    "High values often show up as WRITELOG waits and can severely impact commit latency. "
+                    "Check storage, log file placement, and any synchronous replication settings.",
+                ),
+                (
+                    "disk_queue_length",
+                    "Disk Queue Length",
+                    "",
+                    "Pending IO requests (best-effort proxy).\n\n"
+                    "Collected as COUNT(*) from sys.dm_io_pending_io_requests.\n\n"
+                    "0 is typical. Sustained higher values mean IO is backing up (storage cannot keep up). "
+                    "Correlate with IO latency and IO-related waits.",
+                ),
+            ],
+        )
+
+        # 5) TEMPDB
+        add_section(
+            "TEMPDB",
+            [
+                (
+                    "tempdb_usage",
+                    "TempDB Usage",
+                    "%",
+                    "TempDB data file space usage (%).\n\n"
+                    "Computed from tempdb.sys.dm_db_file_space_usage.\n\n"
+                    "High usage may indicate heavy temp table usage, sorts/hashes spilling, version store growth, "
+                    "or large index operations. Consider tempdb sizing and workload patterns.",
+                ),
+                (
+                    "tempdb_log_used",
+                    "TempDB Log Used",
+                    "%",
+                    "TempDB transaction log used (%).\n\n"
+                    "Collected from tempdb.sys.dm_db_log_space_usage (used_log_space_in_percent).\n\n"
+                    "If this grows quickly, look for long-running transactions, heavy version store activity, "
+                    "or large tempdb writes that keep the log active.",
+                ),
+                (
+                    "pfs_gam_waits",
+                    "PFS/GAM Waits",
+                    "",
+                    "TempDB allocation contention signal (best-effort).\n\n"
+                    "Counts current PAGELATCH waits on TempDB allocation bitmap pages (PFS/GAM/SGAM; page_id 1/2/3) "
+                    "from sys.dm_os_waiting_tasks.\n\n"
+                    "Non-zero values can indicate allocation hot spots. Common mitigations include multiple TempDB data files "
+                    "and removing excessive tempdb allocation pressure from the workload.",
+                ),
+            ],
+        )
+
+        # 6) WAIT CATEGORIES
+        add_section(
+            "WAIT CATEGORIES",
+            [
+                (
+                    "cpu_wait",
+                    "CPU Wait",
+                    "%",
+                    "CPU-related waits (% of total wait time; best-effort grouping).\n\n"
+                    "Based on sys.dm_os_wait_stats and mapped wait types such as SOS_SCHEDULER_YIELD and CX*.\n\n"
+                    "Use this as a directional signal. For root-cause, review top wait types and correlate with Runnable Queue and CPU%.",
+                ),
+                (
+                    "io_wait",
+                    "IO Wait",
+                    "%",
+                    "IO-related waits (% of total wait time; best-effort grouping).\n\n"
+                    "Based on sys.dm_os_wait_stats and mapped wait types such as PAGEIOLATCH_* and WRITELOG.\n\n"
+                    "If high, correlate with IO latencies and pending IO (Disk Queue Length).",
+                ),
+                (
+                    "lock_wait",
+                    "Lock Wait",
+                    "%",
+                    "Lock-related waits (% of total wait time; best-effort grouping).\n\n"
+                    "Based on sys.dm_os_wait_stats and mapped LCK_M_* waits.\n\n"
+                    "If high, investigate blocking chains, transaction duration, and hot rows/tables.",
+                ),
+                (
+                    "memory_wait",
+                    "Memory Wait",
+                    "%",
+                    "Memory-related waits (% of total wait time; best-effort grouping).\n\n"
+                    "Based on sys.dm_os_wait_stats and mapped waits such as RESOURCE_SEMAPHORE.\n\n"
+                    "If high, investigate memory grants, large sorts/hashes, and query design/indexing.",
+                ),
+            ],
+        )
     
     def _on_refresh_rate_changed(self, index: int) -> None:
         """Handle refresh rate change"""
@@ -466,77 +681,154 @@ class DashboardView(BaseView):
         try:
             metrics = service.get_all_metrics()
             
-            # Active Sessions
-            self.update_metric("active_sessions", str(metrics.active_sessions),
-                             "normal" if metrics.active_sessions < 50 else ("warning" if metrics.active_sessions < 100 else "bad"))
-            
-            # OS Total CPU %
-            self.update_metric("os_cpu", str(metrics.cpu_percent),
-                             "normal" if metrics.cpu_percent < 70 else ("warning" if metrics.cpu_percent < 90 else "bad"))
-            
-            # SQL Process CPU %
-            sql_cpu = getattr(metrics, 'sql_cpu_percent', metrics.cpu_percent)
-            self.update_metric("sql_cpu", str(sql_cpu),
-                             "normal" if sql_cpu < 70 else ("warning" if sql_cpu < 90 else "bad"))
-            
-            # Available OS Memory (MB)
-            os_memory = getattr(metrics, 'available_memory_mb', 0)
-            self.update_metric("os_memory", str(os_memory),
-                             "good" if os_memory > 2048 else ("warning" if os_memory > 512 else "bad"))
-            
-            # PLE (sec)
-            self.update_metric("ple", str(metrics.ple_seconds),
-                             "good" if metrics.ple_seconds > 300 else ("warning" if metrics.ple_seconds > 60 else "bad"))
-            
-            # Buffer Cache Hit Ratio %
-            buffer_cache = getattr(metrics, 'buffer_cache_hit_ratio', 99)
-            self.update_metric("buffer_cache", str(buffer_cache),
-                             "good" if buffer_cache > 95 else ("warning" if buffer_cache > 90 else "bad"))
-            
-            # Batch Requests / sec
+            # SERVER HEALTH
+            self.update_metric(
+                "os_cpu",
+                str(metrics.cpu_percent),
+                "normal" if metrics.cpu_percent < 70 else ("warning" if metrics.cpu_percent < 90 else "bad"),
+            )
+
+            sql_cpu = getattr(metrics, "sql_cpu_percent", metrics.cpu_percent)
+            self.update_metric(
+                "sql_cpu",
+                str(sql_cpu),
+                "normal" if sql_cpu < 70 else ("warning" if sql_cpu < 90 else "bad"),
+            )
+
+            self.update_metric(
+                "active_sessions",
+                str(metrics.active_sessions),
+                "normal"
+                if metrics.active_sessions < 50
+                else ("warning" if metrics.active_sessions < 100 else "bad"),
+            )
+
+            runnable_q = getattr(metrics, "runnable_queue", 0)
+            self.update_metric(
+                "runnable_queue",
+                str(runnable_q),
+                "good" if runnable_q < 5 else ("warning" if runnable_q < 20 else "bad"),
+            )
+
+            # MEMORY HEALTH
+            total_mem = getattr(metrics, "total_server_memory_mb", 0)
+            target_mem = getattr(metrics, "target_server_memory_mb", 0)
+            total_status = "normal"
+            if target_mem > 0 and total_mem > 0:
+                ratio = total_mem / target_mem
+                total_status = "good" if ratio >= 0.9 else ("warning" if ratio >= 0.75 else "bad")
+            self.update_metric("total_memory", str(total_mem), total_status)
+            self.update_metric("target_memory", str(target_mem), "normal")
+
+            self.update_metric(
+                "ple",
+                str(metrics.ple_seconds),
+                "good" if metrics.ple_seconds > 300 else ("warning" if metrics.ple_seconds > 60 else "bad"),
+            )
+
+            buffer_cache = getattr(metrics, "buffer_cache_hit_ratio", 99)
+            self.update_metric(
+                "buffer_cache",
+                str(buffer_cache),
+                "good" if buffer_cache > 95 else ("warning" if buffer_cache > 90 else "bad"),
+            )
+
+            # WORKLOAD
             self.update_metric("batch_requests", str(metrics.batch_requests), "normal")
-            
-            # Transactions / sec
-            transactions = getattr(metrics, 'transactions_per_sec', 0)
+            transactions = getattr(metrics, "transactions_per_sec", 0)
             self.update_metric("transactions", str(transactions), "normal")
-            
-            # IO Read Latency (ms)
-            read_latency = getattr(metrics, 'read_latency_ms', metrics.disk_latency_ms)
-            self.update_metric("io_read_latency", str(int(read_latency)),
-                             "good" if read_latency < 5 else ("warning" if read_latency < 20 else "bad"))
-            
-            # IO Write Latency (ms)
-            write_latency = getattr(metrics, 'write_latency_ms', metrics.disk_latency_ms)
-            self.update_metric("io_write_latency", str(int(write_latency)),
-                             "good" if write_latency < 5 else ("warning" if write_latency < 20 else "bad"))
-            
-            # Log Write Latency (ms)
-            log_latency = getattr(metrics, 'log_write_latency_ms', 0)
-            self.update_metric("log_write_latency", str(int(log_latency)),
-                             "good" if log_latency < 5 else ("warning" if log_latency < 20 else "bad"))
-            
-            # Signal Wait %
-            signal_wait = getattr(metrics, 'signal_wait_percent', 0)
-            self.update_metric("signal_wait", str(signal_wait),
-                             "good" if signal_wait < 10 else ("warning" if signal_wait < 25 else "bad"))
-            
-            # Blocked Sessions
-            self.update_metric("blocked_sessions", str(metrics.blocking_count),
-                             "good" if metrics.blocking_count == 0 else ("warning" if metrics.blocking_count < 3 else "bad"))
-            
-            # Runnable Tasks
-            runnable_tasks = getattr(metrics, 'runnable_tasks', 0)
-            self.update_metric("runnable_tasks", str(runnable_tasks),
-                             "normal" if runnable_tasks < 10 else ("warning" if runnable_tasks < 50 else "bad"))
-            
-            # TempDB Log Used %
-            self.update_metric("tempdb_log_used", str(metrics.tempdb_percent),
-                             "good" if metrics.tempdb_percent < 50 else ("warning" if metrics.tempdb_percent < 80 else "bad"))
-            
-            # Blocking (head blocker SPID)
-            blocking_spid = getattr(metrics, 'blocking_spid', 0)
-            self.update_metric("blocking", str(blocking_spid),
-                             "good" if blocking_spid == 0 else "bad")
+
+            compilations = getattr(metrics, "compilations_per_sec", 0)
+            self.update_metric(
+                "compilations",
+                str(compilations),
+                "normal" if compilations < 1000 else ("warning" if compilations < 5000 else "bad"),
+            )
+
+            recomp = getattr(metrics, "recompilations_per_sec", 0)
+            self.update_metric(
+                "recompilations",
+                str(recomp),
+                "good" if recomp == 0 else ("warning" if recomp < 100 else "bad"),
+            )
+
+            # IO
+            read_latency = getattr(metrics, "read_latency_ms", metrics.disk_latency_ms)
+            self.update_metric(
+                "io_read_latency",
+                str(int(read_latency)),
+                "good" if read_latency < 5 else ("warning" if read_latency < 20 else "bad"),
+            )
+
+            write_latency = getattr(metrics, "write_latency_ms", metrics.disk_latency_ms)
+            self.update_metric(
+                "io_write_latency",
+                str(int(write_latency)),
+                "good" if write_latency < 5 else ("warning" if write_latency < 20 else "bad"),
+            )
+
+            log_latency = getattr(metrics, "log_write_latency_ms", 0)
+            self.update_metric(
+                "log_write_latency",
+                str(int(log_latency)),
+                "good" if log_latency < 5 else ("warning" if log_latency < 20 else "bad"),
+            )
+
+            disk_q = getattr(metrics, "disk_queue_length", 0)
+            self.update_metric(
+                "disk_queue_length",
+                str(disk_q),
+                "good" if disk_q < 2 else ("warning" if disk_q < 10 else "bad"),
+            )
+
+            # TEMPDB
+            tempdb_usage = getattr(metrics, "tempdb_usage_percent", 0)
+            self.update_metric(
+                "tempdb_usage",
+                str(tempdb_usage),
+                "good" if tempdb_usage < 50 else ("warning" if tempdb_usage < 80 else "bad"),
+            )
+
+            tempdb_log = getattr(metrics, "tempdb_log_used_percent", getattr(metrics, "tempdb_percent", 0))
+            self.update_metric(
+                "tempdb_log_used",
+                str(tempdb_log),
+                "good" if tempdb_log < 50 else ("warning" if tempdb_log < 80 else "bad"),
+            )
+
+            pfs_gam = getattr(metrics, "pfs_gam_waits", 0)
+            self.update_metric(
+                "pfs_gam_waits",
+                str(pfs_gam),
+                "good" if pfs_gam == 0 else ("warning" if pfs_gam < 10 else "bad"),
+            )
+
+            # WAIT CATEGORIES
+            cpu_wait = getattr(metrics, "cpu_wait_percent", 0)
+            io_wait = getattr(metrics, "io_wait_percent", 0)
+            lock_wait = getattr(metrics, "lock_wait_percent", 0)
+            mem_wait = getattr(metrics, "memory_wait_percent", 0)
+
+            self.update_metric(
+                "cpu_wait",
+                str(cpu_wait),
+                "good" if cpu_wait < 30 else ("warning" if cpu_wait < 50 else "bad"),
+            )
+            self.update_metric(
+                "io_wait",
+                str(io_wait),
+                "good" if io_wait < 30 else ("warning" if io_wait < 50 else "bad"),
+            )
+            self.update_metric(
+                "lock_wait",
+                str(lock_wait),
+                "good" if lock_wait < 20 else ("warning" if lock_wait < 40 else "bad"),
+            )
+            self.update_metric(
+                "memory_wait",
+                str(mem_wait),
+                "good" if mem_wait < 20 else ("warning" if mem_wait < 40 else "bad"),
+            )
 
             self._has_loaded_once = True
             

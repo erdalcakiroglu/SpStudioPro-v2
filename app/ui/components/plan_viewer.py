@@ -167,7 +167,7 @@ class PlanTreeWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         
         # Plan özet satırı
-        self._summary_label = QLabel("Plan yüklenmedi")
+        self._summary_label = QLabel("No plan loaded")
         self._summary_label.setStyleSheet(f"""
             color: {Colors.TEXT_SECONDARY}; 
             font-size: 12px; 
@@ -237,7 +237,9 @@ class PlanTreeWidget(QWidget):
         self._tree.clear()
         
         if not plan:
-            self._summary_label.setText("📋 Plan mevcut değil - Query Store'da plan bulunamadı veya sorgu henüz çalıştırılmamış olabilir.")
+            self._summary_label.setText(
+                "📋 No plan available - Query Store has no plan, or the query may not have executed yet."
+            )
             return
         
         # Özet
@@ -295,7 +297,7 @@ class OperatorDetailPanel(QWidget):
         layout.setSpacing(12)
         
         # Başlık
-        self._title_label = QLabel("Operatör seçin")
+        self._title_label = QLabel("Select an operator")
         self._title_label.setStyleSheet(f"""
             color: {Colors.TEXT_PRIMARY};
             font-size: 16px;
@@ -327,7 +329,7 @@ class OperatorDetailPanel(QWidget):
         self._content_layout.addWidget(self._plan_stability_group)
         
         # Nesne bilgisi grubu
-        self._object_group = self._create_group("📁 Nesne Bilgisi")
+        self._object_group = self._create_group("📁 Object Info")
         self._object_layout = self._object_group.layout()
         self._content_layout.addWidget(self._object_group)
         
@@ -337,7 +339,7 @@ class OperatorDetailPanel(QWidget):
         self._content_layout.addWidget(self._predicate_group)
         
         # Uyarılar grubu
-        self._warnings_group = self._create_group("⚠️ Uyarılar")
+        self._warnings_group = self._create_group("⚠️ Warnings")
         self._warnings_layout = self._warnings_group.layout()
         self._content_layout.addWidget(self._warnings_group)
         
@@ -396,7 +398,7 @@ class OperatorDetailPanel(QWidget):
         
         op = self._operator
         if not op:
-            self._title_label.setText("📋 Operatör seçin")
+            self._title_label.setText("📋 Select an operator")
             return
         
         # Get icon
@@ -407,16 +409,16 @@ class OperatorDetailPanel(QWidget):
         
         # Metrikler
         metrics = [
-            ("Maliyet", f"{op.cost_percent:.2f}%", op.cost_percent > 20),
+            ("Cost", f"{op.cost_percent:.2f}%", op.cost_percent > 20),
             ("Subtree", f"{op.subtree_cost:.6f}", False),
             ("CPU", f"{op.estimated_cpu_cost:.6f}", False),
             ("I/O", f"{op.estimated_io_cost:.6f}", op.estimated_io_cost > 0.1),
-            ("Tahmini Satır", f"{op.estimated_rows:,.0f}", op.estimated_rows > 100000),
-            ("Satır Boyutu", f"{op.estimated_row_size} bytes", False),
+            ("Estimated Rows", f"{op.estimated_rows:,.0f}", op.estimated_rows > 100000),
+            ("Row Size", f"{op.estimated_row_size} bytes", False),
         ]
         
         if op.parallel:
-            metrics.append(("Paralel", f"Evet (DOP: {op.estimated_degree})", False))
+            metrics.append(("Parallel", f"Yes (DOP: {op.estimated_degree})", False))
         
         if op.memory_grant_kb:
             metrics.append(("Memory Grant", f"{op.memory_grant_kb:,} KB", op.memory_grant_kb > 10000))
@@ -462,7 +464,7 @@ class OperatorDetailPanel(QWidget):
                 w_label.setStyleSheet(f"color: {Colors.ERROR}; background: transparent;")
                 self._warnings_layout.addWidget(w_label)
         else:
-            ok_label = QLabel("✅ Uyarı yok")
+            ok_label = QLabel("✅ No warnings")
             ok_label.setStyleSheet(f"color: {Colors.SUCCESS}; background: transparent;")
             self._warnings_layout.addWidget(ok_label)
 
@@ -477,7 +479,7 @@ class OperatorDetailPanel(QWidget):
 
         plan_count = self._plan_count or 0
         if self._plan_stability == PlanStability.PROBLEM:
-            text = f"🔴 Problem ({plan_count} plans) - Çoklu plan tespit edildi - Parametre sniffing olası"
+            text = f"🔴 Problem ({plan_count} plans) - Multiple plans detected - possible parameter sniffing"
             style = """
                 color: #b91c1c;
                 font-size: 11px;
@@ -488,7 +490,7 @@ class OperatorDetailPanel(QWidget):
                 padding: 8px 10px;
             """
         elif self._plan_stability == PlanStability.ATTENTION:
-            text = f"🟡 Dikkat ({plan_count} plans) - Plan değişimleri mevcut"
+            text = f"🟡 Attention ({plan_count} plans) - Plan changes detected"
             style = """
                 color: #92400e;
                 font-size: 11px;
@@ -499,7 +501,7 @@ class OperatorDetailPanel(QWidget):
                 padding: 8px 10px;
             """
         else:
-            text = "✅ Stabil - Tek plan tespit edildi"
+            text = "✅ Stable - single plan detected"
             style = """
                 color: #047857;
                 font-size: 11px;
@@ -600,7 +602,7 @@ class MissingIndexPanel(QWidget):
                 item.widget().deleteLater()
         
         if not self._indexes:
-            no_data = QLabel("✅ Missing index önerisi yok")
+            no_data = QLabel("✅ No missing index recommendations")
             no_data.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 14px; padding: 20px;")
             self._content_layout.insertWidget(0, no_data)
             return
@@ -817,7 +819,7 @@ class PlanViewerWidget(QWidget):
                 font-size: 13px;
             }}
         """)
-        self._warnings_text.setPlaceholderText("Plan uyarıları burada gösterilecek")
+        self._warnings_text.setPlaceholderText("Plan warnings will appear here")
         warnings_layout.addWidget(self._warnings_text)
         
         self._tabs.addTab(warnings_page, "⚠️ Warnings")
@@ -852,7 +854,9 @@ class PlanViewerWidget(QWidget):
                 self._update_warnings_view(plan.warnings)
             else:
                 self._tabs.setTabText(2, "⚠️ Warnings")
-                self._warnings_text.setMarkdown("✅ **Plan uyarısı yok**\n\nExecution plan'da herhangi bir uyarı tespit edilmedi.")
+                self._warnings_text.setMarkdown(
+                    "✅ **No plan warnings**\n\nNo warnings were detected in the execution plan."
+                )
         else:
             self._missing_panel.set_indexes([])
             self._tabs.setTabText(1, "📈 Missing Indexes")
@@ -869,9 +873,9 @@ class PlanViewerWidget(QWidget):
     
     def _update_warnings_view(self, warnings: List[PlanWarning]) -> None:
         """Uyarıları güncelle"""
-        text = "## ⚠️ Plan Uyarıları\n\n"
+        text = "## ⚠️ Plan Warnings\n\n"
         for i, w in enumerate(warnings, 1):
             icon = "🔴" if w.severity == "warning" else "🟡"
-            text += f"### {icon} Uyarı {i}\n{w.message}\n\n"
+            text += f"### {icon} Warning {i}\n{w.message}\n\n"
         
         self._warnings_text.setMarkdown(text)

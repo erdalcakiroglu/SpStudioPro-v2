@@ -78,7 +78,7 @@ class JobsQueries:
     FROM msdb.dbo.sysjobs j
     LEFT JOIN msdb.dbo.syscategories c ON j.category_id = c.category_id
     LEFT JOIN msdb.dbo.sysjobactivity ja ON j.job_id = ja.job_id
-        AND ja.session_id = (SELECT MAX(session_id) FROM msdb.dbo.syssessions)
+        AND ja.session_id = (SELECT MAX(session_id) FROM msdb.dbo.sysjobactivity)
     LEFT JOIN msdb.dbo.sysjobschedules js ON j.job_id = js.job_id
     ORDER BY j.name
     """
@@ -91,7 +91,17 @@ class JobsQueries:
         SUM(CASE WHEN j.enabled = 0 THEN 1 ELSE 0 END) AS disabled_jobs,
         (SELECT COUNT(DISTINCT job_id) FROM msdb.dbo.sysjobactivity 
          WHERE run_requested_date IS NOT NULL AND stop_execution_date IS NULL
-         AND session_id = (SELECT MAX(session_id) FROM msdb.dbo.syssessions)) AS running_jobs
+         AND session_id = (SELECT MAX(session_id) FROM msdb.dbo.sysjobactivity)) AS running_jobs
+    FROM msdb.dbo.sysjobs j
+    """
+
+    # Fallback summary when caller has no SELECT permission on msdb.dbo.sysjobactivity.
+    JOBS_SUMMARY_NO_ACTIVITY = """
+    SELECT
+        COUNT(*) AS total_jobs,
+        SUM(CASE WHEN j.enabled = 1 THEN 1 ELSE 0 END) AS enabled_jobs,
+        SUM(CASE WHEN j.enabled = 0 THEN 1 ELSE 0 END) AS disabled_jobs,
+        CAST(0 AS INT) AS running_jobs
     FROM msdb.dbo.sysjobs j
     """
     
@@ -153,7 +163,7 @@ class JobsQueries:
     JOIN msdb.dbo.sysjobactivity ja ON j.job_id = ja.job_id
     WHERE ja.run_requested_date IS NOT NULL
       AND ja.stop_execution_date IS NULL
-      AND ja.session_id = (SELECT MAX(session_id) FROM msdb.dbo.syssessions)
+      AND ja.session_id = (SELECT MAX(session_id) FROM msdb.dbo.sysjobactivity)
     ORDER BY ja.run_requested_date
     """
     
@@ -240,7 +250,7 @@ class JobsQueries:
     LEFT JOIN msdb.dbo.sysjobhistory h ON j.job_id = h.job_id AND h.step_id = 0
     WHERE ja.run_requested_date IS NOT NULL
       AND ja.stop_execution_date IS NULL
-      AND ja.session_id = (SELECT MAX(session_id) FROM msdb.dbo.syssessions)
+      AND ja.session_id = (SELECT MAX(session_id) FROM msdb.dbo.sysjobactivity)
     GROUP BY j.name, ja.run_requested_date
     HAVING DATEDIFF(MINUTE, ja.run_requested_date, GETDATE()) > 30
     ORDER BY running_minutes DESC

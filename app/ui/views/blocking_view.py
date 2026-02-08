@@ -391,12 +391,12 @@ class StatCard(QFrame):
         
         # Circle
         circle = QFrame()
-        circle.setFixedSize(90, 90)
+        circle.setFixedSize(98, 98)
         circle.setStyleSheet(f"""
             QFrame {{
                 background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.BORDER};
-                border-radius: 45px;
+                border-radius: 49px;
             }}
         """)
         circle_layout = QVBoxLayout(circle)

@@ -93,7 +93,7 @@ Her optimizasyon önerisi için:
 -- sorunlu kod
 ```
 
-**Önerilen Kod:**
+**Suggested Code:**
 ```sql
 -- optimize edilmiş kod
 ```
@@ -685,6 +685,12 @@ class AdvancedPromptBuilder:
                     user_prompt = user_override.replace("{base_user}", user_prompt)
                 else:
                     user_prompt = user_override
+
+            # Enforce English output for all user-visible AI responses.
+            system_prompt = (
+                f"{system_prompt}\n\n## LANGUAGE REQUIREMENT\n"
+                "All output must be in English only."
+            )
         except Exception:
             pass
 
@@ -775,7 +781,7 @@ class AdvancedPromptBuilder:
                         user_prompt += f"| {row.get('metric','')} | {row.get('value','')} | {row.get('unit','')} |\n"
                 server_table = context.additional_context.get("server_stats_table")
                 if server_table:
-                    user_prompt += "\n**Sunucu Performans Özeti:**\n"
+                    user_prompt += "\n**Server Performance Summary:**\n"
                     user_prompt += "| Metric | Value | Unit |\n|---|---:|:---|\n"
                     for row in server_table:
                         user_prompt += f"| {row.get('metric','')} | {row.get('value','')} | {row.get('unit','')} |\n"
@@ -787,19 +793,19 @@ class AdvancedPromptBuilder:
         
         user_prompt += """
 ---
-Lütfen aşağıdaki formatta kapsamlı bir analiz yap:
+Please provide a comprehensive analysis in the format below:
 
-## 🧾 Kısa Özet
-- 2-3 cümlelik özet
+## 🧾 Short Summary
+- 2-3 sentence summary
 
-## 🔍 Darboğazlar ve Kök Nedenler
-- Ana sorunlar (madde madde)
+## 🔍 Bottlenecks and Root Causes
+- Main issues (bullet points)
 
-## 📊 İstatistik Özeti
-- Yukarıdaki metrik tablosunu yorumla
+## 📊 Statistics Summary
+- Interpret the metrics table above
 
-## 💡 Öneriler (Önceliklendirilmiş)
-| # | Öneri | Öncelik | Risk | Tahmini Kazanç |
+## 💡 Recommendations (Prioritized)
+| # | Recommendation | Priority | Risk | Estimated Gain |
 |---|------|---------|------|----------------|
 
 ## 🧪 Test / Doğrulama Planı
@@ -868,7 +874,7 @@ Query Store verisi yoksa DMV istatistiklerine güven.
 Execution plan yoksa kod analizi ağırlıklı öneriler sun.
 """
         elif completeness:
-            quality = completeness.get('quality_level', 'unknown')
+            quality = str(completeness.get('quality_level', 'unknown') or 'unknown').strip().lower()
             score = completeness.get('completeness_score', 0)
             if quality != 'full':
                 data_quality_section = f"""
@@ -908,10 +914,27 @@ Execution plan yoksa kod analizi ağırlıklı öneriler sun.
         if missing_indexes:
             user_prompt += "\n**SQL Server Missing Index Önerileri:**\n"
             for idx in missing_indexes[:3]:
-                impact = _fmt_float(idx.get('avg_user_impact', 0), 0)
-                user_prompt += f"- Equality: {idx.get('equality_columns', '-')}, "
-                user_prompt += f"Include: {idx.get('included_columns', '-')}, "
-                user_prompt += f"Etki: %{impact}\n"
+                impact = _fmt_float(idx.get('avg_user_impact', idx.get('impact_score', 0)), 0)
+                eq_sig = idx.get('equality_signature', idx.get('equality_columns', '-'))
+                inc_sig = idx.get('include_signature', idx.get('included_columns', '-'))
+                eq_meta = idx.get('equality_columns', {}) if isinstance(idx.get('equality_columns', {}), dict) else {}
+                key_meta = idx.get('key_columns', {}) if isinstance(idx.get('key_columns', {}), dict) else {}
+                user_prompt += f"- Equality Sig: {eq_sig}, "
+                user_prompt += f"Include Sig: {inc_sig}, "
+                user_prompt += f"Etki: %{impact}"
+                if eq_meta:
+                    user_prompt += (
+                        f", EqBytes: {_fmt_int(eq_meta.get('total_bytes', 0))}, "
+                        f"EqFixed: {eq_meta.get('all_fixed_length', False)}, "
+                        f"EqNotNull: {eq_meta.get('all_not_nullable', False)}"
+                    )
+                if key_meta:
+                    user_prompt += (
+                        f", KeyBytes: {_fmt_int(key_meta.get('total_bytes', 0))}/"
+                        f"{_fmt_int(key_meta.get('limit_bytes', 900))}, "
+                        f"Key>900: {key_meta.get('exceeds_900_byte_limit', False)}"
+                    )
+                user_prompt += "\n"
         
         if dependencies:
             user_prompt += "\n**Bağımlılıklar:**\n"
@@ -948,16 +971,16 @@ Execution plan yoksa kod analizi ağırlıklı öneriler sun.
                         f"({_fmt_int(w.get('total_wait_ms', 0))} ms)\n"
                     )
             if top_queries:
-                user_prompt += "\n**Top Statements (Query Store):**\n"
+                user_prompt += "\n**Top Query Patterns (Query Store):**\n"
                 for q in top_queries[:3]:
-                    q_text = (q.get('query_text') or '').replace('\n', ' ')
-                    q_text = q_text[:180] + ("..." if len(q_text) > 180 else "")
+                    pattern_hash = q.get("pattern_hash") or q.get("query_hash") or "-"
+                    pattern_type = q.get("pattern_type", "OTHER")
                     user_prompt += (
+                        f"- Pattern: {pattern_type} ({pattern_hash})\n"
                         f"- Avg Duration: {_fmt_float(q.get('avg_duration_ms', 0))} ms, "
                         f"CPU: {_fmt_float(q.get('avg_cpu_ms', 0))} ms, "
                         f"Reads: {_fmt_int(q.get('avg_logical_reads', 0))}, "
                         f"Execs: {_fmt_int(q.get('total_executions', 0))}\n"
-                        f"  Text: {q_text}\n"
                     )
 
         if plan_meta:
@@ -1016,19 +1039,42 @@ Execution plan yoksa kod analizi ağırlıklı öneriler sun.
         if existing_indexes:
             user_prompt += "\n**📊 Existing Indexes on Referenced Tables:**\n"
             for table_info in existing_indexes[:5]:
-                user_prompt += f"\n*{table_info.get('table', '')}:*\n"
+                table_label = table_info.get('table', table_info.get('table_hash', ''))
+                user_prompt += f"\n*{table_label}:*\n"
                 for idx in table_info.get('indexes', [])[:5]:
                     idx_type = "PK" if idx.get('is_pk') else ("UQ" if idx.get('is_unique') else "IX")
                     seeks = _fmt_int(idx.get('seeks', 0))
                     scans = _fmt_int(idx.get('scans', 0))
-                    user_prompt += f"- [{idx_type}] {idx.get('name', '')} ({idx.get('key_columns', '')})"
-                    if idx.get('include_columns'):
-                        user_prompt += f" INCLUDE({idx.get('include_columns')})"
-                    user_prompt += f" - Seeks: {seeks}, Scans: {scans}\n"
+                    idx_id = idx.get('name', idx.get('index_hash', ''))
+                    key_ref = idx.get('key_columns', idx.get('key_type_signature', ''))
+                    include_ref = idx.get('include_columns', idx.get('include_type_signature', ''))
+                    reads = idx.get('reads', {}) if isinstance(idx.get('reads', {}), dict) else {}
+                    derived = idx.get('derived_metrics', {}) if isinstance(idx.get('derived_metrics', {}), dict) else {}
+                    read_write_ratio = derived.get('read_write_ratio')
+                    access_pattern = reads.get('access_pattern', idx.get('access_pattern', 'NO_READS'))
+                    is_used = reads.get('is_used', idx.get('is_used', False))
+                    last_read_age = reads.get('last_user_read_age_days')
+                    key_bytes = idx.get('key_column_total_bytes', 0)
+                    key_limit = idx.get('key_width_limit_bytes', 900)
+                    key_over = idx.get('key_width_over_limit', False)
+                    user_prompt += f"- [{idx_type}] {idx_id} ({key_ref})"
+                    if include_ref:
+                        user_prompt += f" INCLUDE({include_ref})"
+                    user_prompt += f" - Seeks: {seeks}, Scans: {scans}"
+                    user_prompt += f", Used: {is_used}, Access: {access_pattern}"
+                    if read_write_ratio is not None:
+                        user_prompt += f", R/W: {_fmt_float(read_write_ratio)}"
+                    if last_read_age is not None:
+                        user_prompt += f", LastReadAge: {_fmt_float(last_read_age)}d"
+                    user_prompt += (
+                        f", KeyBytes: {_fmt_int(key_bytes)}/{_fmt_int(key_limit)}, "
+                        f"Key>900: {key_over}"
+                    )
+                    user_prompt += "\n"
 
         # NEW: Parameter Sniffing Analysis
         if parameter_sniffing:
-            risk = parameter_sniffing.get('risk_level', 'unknown')
+            risk = str(parameter_sniffing.get('risk_level', 'unknown') or 'unknown').strip().lower()
             risk_emoji = "🟢" if risk == "low" else ("🟡" if risk == "medium" else "🔴")
             user_prompt += f"\n**{risk_emoji} Parameter Sniffing Analysis:**\n"
             user_prompt += f"- Risk Level: {risk.upper()}\n"
@@ -1044,9 +1090,9 @@ Execution plan yoksa kod analizi ağırlıklı öneriler sun.
 
         # NEW: Historical Trend
         if historical_trend:
-            direction = historical_trend.get('trend_direction', 'stable')
+            direction = str(historical_trend.get('trend_direction', 'stable') or 'stable').strip().lower()
             direction_emoji = "📈" if direction == "degrading" else ("📉" if direction == "improving" else "➡️")
-            user_prompt += f"\n**{direction_emoji} Historical Trend ({historical_trend.get('recent_period', 'Last 7 days')} vs {historical_trend.get('previous_period', 'Previous 7 days')}):**\n"
+            user_prompt += f"\n**{direction_emoji} Historical Trend ({historical_trend.get('recent_period', 'Last 14 days')} vs {historical_trend.get('previous_period', 'Previous 14 days')}):**\n"
             user_prompt += f"- Trend: {direction.upper()}\n"
             if historical_trend.get('duration_change_percent') is not None:
                 user_prompt += f"- Duration Change: {historical_trend.get('duration_change_percent'):+.1f}%\n"
@@ -1085,34 +1131,61 @@ Execution plan yoksa kod analizi ağırlıklı öneriler sun.
 
 Please provide a comprehensive analysis including:
 
-### 1. 🧾 Executive Summary
-- 2-3 sentence overview of main findings
+### 1. Executive Summary (Enhanced)
+- 3-5 sentence overview with overall risk level, estimated impact, and top 3 findings
+- Include "Immediate 24-hour actions" and "Strategic follow-up actions"
 
-### 2. 🔍 Identified Issues (Prioritized)
+### 2. Classification System
+- Use a clear taxonomy and classify findings into:
+  - Effective
+  - Needs Maintenance
+  - Unnecessary
+  - High Write Cost
+  - CRITICAL_QUERY_ISSUE
+  - POOR_QUERY_DESIGN
+  - Uncertain / Requires More Evidence
+- Explain why each class was assigned and provide class counts.
+- Provide a single Query+Index combined class with rationale.
+
+### 3. Identified Issues (Prioritized)
 | # | Issue | Priority | Risk | Impact |
 |---|-------|----------|------|--------|
 | ... | ... | P1/P2/P3 | Low/Med/High | ... |
 
-### 3. 💡 Optimization Recommendations
+### 4. Optimization Recommendations
 For each recommendation:
 - Current code (problematic)
 - Optimized code
 - Expected improvement
 
-### 4. 📈 Index Recommendations
-Full CREATE INDEX statements with:
-- Rationale
-- Expected impact
-- Maintenance considerations
+### 5. Missing Index Comparison
+- Compare missing-index signals with existing indexes before proposing new indexes.
+- For each candidate, state:
+  - Coverage status: Covered / Partially Covered / Not Covered / Not Feasible
+  - Source comparison: Plan Missing Index vs Existing Index (and DMV Missing Index vs Existing Index when available)
+  - Leftmost prefix detection result
+  - Include-column coverage analysis (matched/missing include columns)
+  - Best existing index match
+  - Recommended action: Reuse, Refine existing, or Create new
+  - Key width feasibility (900-byte limit)
 
-### 5. ⚡ Parameter Sniffing Mitigation (if applicable)
+### 6. Deep Existing Index Analysis
+- Include deep analysis of current indexes:
+  - Seek vs scan behavior
+  - Read/write pressure and write overhead
+  - 14-day usage window baseline coverage and reliability status
+  - Usage-window warning signals (baseline gaps, low reliability)
+  - Fragmentation, page density, stale stats
+  - Duplicate/overlap and left-prefix coverage risks
+
+### 7. Parameter Sniffing Mitigation (if applicable)
 - Specific recommendations (RECOMPILE, OPTIMIZE FOR, etc.)
 
-### 6. 🧪 Testing & Validation Plan
+### 8. Testing & Validation Plan
 - How to measure improvement
 - Before/after comparison approach
 
-### 7. ⚠️ Risks & Considerations
+### 9. Risks & Considerations
 - Deployment risks
 - Potential side effects
 """
@@ -1188,10 +1261,27 @@ Full CREATE INDEX statements with:
         if missing_indexes:
             user_prompt += "\n**SQL Server Missing Index Önerileri:**\n"
             for idx in missing_indexes[:3]:
-                impact = _fmt_float(idx.get('avg_user_impact', 0), 0)
-                user_prompt += f"- Equality: {idx.get('equality_columns', '-')}, "
-                user_prompt += f"Include: {idx.get('included_columns', '-')}, "
-                user_prompt += f"Etki: %{impact}\n"
+                impact = _fmt_float(idx.get('avg_user_impact', idx.get('impact_score', 0)), 0)
+                eq_sig = idx.get('equality_signature', idx.get('equality_columns', '-'))
+                inc_sig = idx.get('include_signature', idx.get('included_columns', '-'))
+                eq_meta = idx.get('equality_columns', {}) if isinstance(idx.get('equality_columns', {}), dict) else {}
+                key_meta = idx.get('key_columns', {}) if isinstance(idx.get('key_columns', {}), dict) else {}
+                user_prompt += f"- Equality Sig: {eq_sig}, "
+                user_prompt += f"Include Sig: {inc_sig}, "
+                user_prompt += f"Etki: %{impact}"
+                if eq_meta:
+                    user_prompt += (
+                        f", EqBytes: {_fmt_int(eq_meta.get('total_bytes', 0))}, "
+                        f"EqFixed: {eq_meta.get('all_fixed_length', False)}, "
+                        f"EqNotNull: {eq_meta.get('all_not_nullable', False)}"
+                    )
+                if key_meta:
+                    user_prompt += (
+                        f", KeyBytes: {_fmt_int(key_meta.get('total_bytes', 0))}/"
+                        f"{_fmt_int(key_meta.get('limit_bytes', 900))}, "
+                        f"Key>900: {key_meta.get('exceeds_900_byte_limit', False)}"
+                    )
+                user_prompt += "\n"
 
         if dependencies:
             user_prompt += "\n**Bağımlılıklar:**\n"
@@ -1249,8 +1339,9 @@ Full CREATE INDEX statements with:
                 user_prompt += f"\n**Plan Issues:** {', '.join(set(issues))}\n"
 
         # NEW: Parameter Sniffing (compact)
-        if parameter_sniffing and parameter_sniffing.get('risk_level') in ('medium', 'high'):
-            user_prompt += f"\n**Parameter Sniffing Risk:** {parameter_sniffing.get('risk_level').upper()}\n"
+        risk_level = str((parameter_sniffing or {}).get('risk_level', '') or '').strip().lower()
+        if risk_level in ('medium', 'high'):
+            user_prompt += f"\n**Parameter Sniffing Risk:** {risk_level.upper()}\n"
 
         if context and context.sql_version:
             user_prompt += f"\n**SQL Server Version:** {context.sql_version}\n"
@@ -1327,7 +1418,7 @@ Apply these optimizations:
 """
         
         if existing_indexes:
-            user_prompt += "\n**Mevcut Indexler:**\n"
+            user_prompt += "\n**Existing Indexes:**\n"
             for idx in existing_indexes[:5]:
                 user_prompt += f"- {idx}\n"
 
@@ -1336,9 +1427,9 @@ Apply these optimizations:
         
         user_prompt += """
 ---
-Lütfen en uygun index stratejisini öner. 
-Hem CREATE INDEX syntax'ı hem de neden bu index'in gerekli olduğunu açıkla.
-Varsa filtered index alternatifi de değerlendir.
+Please recommend the most suitable index strategy.
+Provide both CREATE INDEX syntax and rationale for why the index is needed.
+Also evaluate a filtered index alternative when applicable.
 """
         return cls._apply_prompt_overrides(PromptType.INDEX_RECOMMENDATION, system_prompt, user_prompt)
     
@@ -1355,21 +1446,21 @@ Varsa filtered index alternatifi de değerlendir.
         """
         system_prompt = cls.get_system_prompt(PromptType.BLOCKING_ANALYSIS)
         
-        user_prompt = """## BLOCKING DURUMU ANALİZİ
+        user_prompt = """## BLOCKING ANALYSIS
 
-**Aktif Blocking Zincirleri:**
+**Active Blocking Chains:**
 """
         
         if not blocking_data:
-            user_prompt += "✅ Şu anda aktif blocking yok.\n"
+            user_prompt += "✅ There is no active blocking at the moment.\n"
         else:
-            user_prompt += "| Blocked | Blocker | Wait Type | Süre (s) | Database |\n"
+            user_prompt += "| Blocked | Blocker | Wait Type | Duration (s) | Database |\n"
             user_prompt += "|---------|---------|-----------|----------|----------|\n"
             for b in blocking_data[:10]:
                 user_prompt += f"| {b.session_id} | {b.blocking_session_id} | {b.wait_type} | {b.wait_seconds:.0f} | {b.database_name} |\n"
         
         if head_blockers:
-            user_prompt += "\n**Head Blockers (Zincirin Başı):**\n"
+            user_prompt += "\n**Head Blockers (Chain Root):**\n"
             for hb in head_blockers:
                 user_prompt += f"\n### Session {hb.get('head_blocker_session')}\n"
                 user_prompt += f"- Login: {hb.get('login_name')}\n"
@@ -1383,10 +1474,10 @@ Varsa filtered index alternatifi de değerlendir.
         
         user_prompt += """
 ---
-Lütfen bu blocking durumunu analiz et:
-1. Kök neden ne olabilir?
-2. Acil çözüm önerileri
-3. Kalıcı çözüm için ne yapılmalı?
+Please analyze this blocking situation:
+1. What is the likely root cause?
+2. What are the immediate mitigation steps?
+3. What should be done for a permanent fix?
 """
         
         return cls._apply_prompt_overrides(PromptType.BLOCKING_ANALYSIS, system_prompt, user_prompt)

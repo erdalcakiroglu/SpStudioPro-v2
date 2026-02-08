@@ -164,7 +164,7 @@ class WaitStatsQueries:
     
     # Top wait types (excluding benign waits)
     TOP_WAITS = f"""
-    SELECT TOP 20
+    SELECT TOP 10
         wait_type,
         waiting_tasks_count,
         wait_time_ms,

@@ -214,6 +214,20 @@ class DashboardQueries:
     
     DROP TABLE #ErrorLog;
     """
+
+    # Check permission for xp_readerrorlog
+    ERROR_LOG_CAN_READ = """
+    SELECT HAS_PERMS_BY_NAME('sys.xp_readerrorlog', 'OBJECT', 'EXECUTE') AS can_exec
+    """
+
+    # Error Log Count (fallback without xp_readerrorlog; best-effort)
+    ERROR_LOG_COUNT_FALLBACK = """
+    SELECT COUNT(*) AS error_count
+    FROM sys.dm_os_ring_buffers rb
+    CROSS JOIN sys.dm_os_sys_info si
+    WHERE rb.ring_buffer_type = 'RING_BUFFER_EXCEPTION'
+      AND DATEADD(ms, -1 * (si.ms_ticks - rb.timestamp), GETDATE()) > DATEADD(HOUR, -24, GETDATE())
+    """
     
     # Severity errors from sys.messages (alternative)
     SEVERITY_ERRORS = """

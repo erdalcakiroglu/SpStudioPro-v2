@@ -101,7 +101,7 @@ class AIChatService:
             
         except Exception as e:
             logger.error(f"Error processing message: {e}")
-            return f"⚠️ İşlem sırasında bir hata oluştu: {str(e)}"
+            return f"⚠️ An error occurred while processing the request: {str(e)}"
     
     async def _execute_intent(self, intent_match: IntentMatch) -> Dict[str, Any]:
         """Execute query based on intent"""
@@ -386,24 +386,24 @@ class AIChatService:
         """Get help information"""
         return {
             "capabilities": [
-                "🔍 Sorgu analizi ve optimizasyon önerileri",
-                "📊 Performans metrikleri ve top queries",
-                "⏱️ Wait statistics analizi",
-                "🔒 Blocking session tespiti",
-                "📈 Index önerileri (missing indexes)",
-                "💾 Memory ve CPU durumu",
-                "⚙️ SQL Agent job durumu",
-                "🛡️ Güvenlik denetimi",
-                "💿 Backup durumu kontrolü",
+                "🔍 Query analysis and optimization recommendations",
+                "📊 Performance metrics and top queries",
+                "⏱️ Wait statistics analysis",
+                "🔒 Blocking session detection",
+                "📈 Index recommendations (missing indexes)",
+                "💾 Memory and CPU status",
+                "⚙️ SQL Agent job status",
+                "🛡️ Security audit summary",
+                "💿 Backup status checks",
             ],
             "examples": [
-                "En yavaş sorguları göster",
-                "Wait istatistiklerini analiz et",
-                "Blocking var mı kontrol et",
-                "Eksik index önerilerini getir",
-                "Sunucu durumunu özetle",
-                "Son backup'lar ne zaman alındı?",
-                "Güvenlik kontrolü yap",
+                "Show the slowest queries",
+                "Analyze wait statistics",
+                "Check if there is blocking",
+                "Get missing index recommendations",
+                "Summarize server status",
+                "When were the last backups taken?",
+                "Run a security check",
             ]
         }
     
@@ -420,7 +420,7 @@ class AIChatService:
             return self._format_help_response(data.get("help", {}))
         
         if "error" in data:
-            return f"⚠️ Veri alınırken hata oluştu: {data['error']}"
+            return f"⚠️ Error while collecting data: {data['error']}"
         
         # Check if Ollama is available
         try:
@@ -433,10 +433,10 @@ class AIChatService:
             return self._format_data_response(intent_match, data)
         
         # Build context for AI
-        system_prompt = """Sen SQL Server veritabanı uzmanı bir AI asistansın.
-Kullanıcının sorularına Türkçe olarak yanıt ver.
-Yanıtlarını Markdown formatında, okunabilir ve yapılandırılmış şekilde sun.
-Teknik terimleri açıkla ve somut öneriler sun."""
+        system_prompt = """You are an AI assistant specializing in Microsoft SQL Server.
+Answer the user's questions in English.
+Use readable, well-structured Markdown.
+Explain technical terms when needed and provide concrete recommendations."""
         
         user_prompt = self._build_response_prompt(message, intent_match, data)
         
@@ -455,19 +455,19 @@ Teknik terimleri açıkla ve somut öneriler sun."""
         data: Dict[str, Any]
     ) -> str:
         """Build prompt for AI response generation"""
-        prompt = f"""Kullanıcı Sorusu: {message}
+        prompt = f"""User Question: {message}
 
-Bağlam:
-- Sunucu: {self._context.server_name}
-- Veritabanı: {self._context.database_name}
+Context:
+- Server: {self._context.server_name}
+- Database: {self._context.database_name}
 - SQL Server Version: {self._context.sql_version}
-- Tespit Edilen İstek: {intent_match.intent.value}
+- Detected Intent: {intent_match.intent.value}
 
-Toplanan Veriler:
+Collected Data:
 {self._format_data_for_prompt(data)}
 
-Lütfen bu verileri analiz ederek kullanıcının sorusuna kapsamlı bir yanıt ver.
-Önemli bulguları vurgula ve varsa iyileştirme önerileri sun."""
+Please analyze the data and provide a comprehensive answer to the user's question.
+Highlight key findings and include improvement recommendations when applicable."""
         
         return prompt
 
@@ -509,16 +509,16 @@ Lütfen bu verileri analiz ederek kullanıcının sorusuna kapsamlı bir yanıt 
     
     def _format_help_response(self, help_info: Dict) -> str:
         """Format help response"""
-        response = """## 🤖 SQL Perf AI Asistan
+        response = """## 🤖 SQL Perf AI Assistant
 
-Veritabanınız hakkında doğal dilde sorular sorabilirsiniz.
+You can ask natural language questions about your SQL Server instance.
 
-### Yapabileceklerim:
+### What I Can Do:
 """
         for cap in help_info.get("capabilities", []):
             response += f"\n- {cap}"
         
-        response += "\n\n### Örnek Sorular:\n"
+        response += "\n\n### Example Questions:\n"
         for ex in help_info.get("examples", []):
             response += f"\n- *\"{ex}\"*"
         
@@ -530,25 +530,25 @@ Veritabanınız hakkında doğal dilde sorular sorabilirsiniz.
         
         if intent == Intent.SERVER_STATUS:
             metrics = data.get("metrics", {})
-            return f"""## 📊 Sunucu Durumu
+            return f"""## 📊 Server Status
 
-| Metrik | Değer |
+| Metric | Value |
 |--------|-------|
-| CPU Kullanımı | {metrics.get('cpu_percent', 0)}% |
-| Memory Kullanımı | {metrics.get('memory_percent', 0)}% |
-| Aktif Oturumlar | {metrics.get('active_sessions', 0)} |
+| CPU Usage | {metrics.get('cpu_percent', 0)}% |
+| Memory Usage | {metrics.get('memory_percent', 0)}% |
+| Active Sessions | {metrics.get('active_sessions', 0)} |
 | Blocking | {metrics.get('blocking_count', 0)} |
 
-*Bağlı sunucu: {self._context.server_name} / {self._context.database_name}*
+*Connected to: {self._context.server_name} / {self._context.database_name}*
 """
         
         elif intent == Intent.TOP_QUERIES:
             queries = data.get("queries", [])
             if not queries:
-                return "📊 Sorgu istatistiği bulunamadı."
+                return "📊 No query statistics found."
             
-            response = "## 📊 En Yoğun Sorgular\n\n"
-            response += "| # | Sorgu | Toplam Süre | Çalışma | Okuma |\n"
+            response = "## 📊 Top Queries\n\n"
+            response += "| # | Query | Total Time | Executions | Reads |\n"
             response += "|---|-------|-------------|---------|-------|\n"
             for i, q in enumerate(queries[:10], 1):
                 text = str(q.get('query_text', ''))[:50].replace('\n', ' ').replace('|', '/')
@@ -558,10 +558,10 @@ Veritabanınız hakkında doğal dilde sorular sorabilirsiniz.
         elif intent == Intent.SLOW_QUERIES:
             queries = data.get("queries", [])
             if not queries:
-                return "⏱️ Yavaş sorgu bulunamadı."
+                return "⏱️ No slow queries found."
             
-            response = "## ⏱️ Yavaş Sorgular\n\n"
-            response += "| # | Sorgu | Ort. Süre | Çalışma |\n"
+            response = "## ⏱️ Slow Queries\n\n"
+            response += "| # | Query | Avg Duration | Executions |\n"
             response += "|---|-------|-----------|----------|\n"
             for i, q in enumerate(queries[:10], 1):
                 text = str(q.get('query_text', ''))[:50].replace('\n', ' ').replace('|', '/')
@@ -571,10 +571,10 @@ Veritabanınız hakkında doğal dilde sorular sorabilirsiniz.
         elif intent == Intent.TOP_WAITS:
             waits = data.get("waits", [])
             if not waits:
-                return "✅ Önemli bir wait istatistiği bulunamadı."
+                return "✅ No significant wait statistics found."
             
             response = "## ⏱️ Top Wait Types\n\n"
-            response += "| Wait Type | Süre | Oran |\n"
+            response += "| Wait Type | Time | Ratio |\n"
             response += "|-----------|------|------|\n"
             for w in waits[:10]:
                 wait_ms = w.get('wait_time_ms', 0)
@@ -584,78 +584,78 @@ Veritabanınız hakkında doğal dilde sorular sorabilirsiniz.
         elif intent == Intent.BLOCKING_SESSIONS:
             blocking = data.get("blocking", [])
             if not blocking:
-                return "✅ Şu anda blocking durumu yok."
+                return "✅ No blocking detected right now."
             
             response = "## 🔒 Blocking Sessions\n\n"
-            response += "| Blocked | Blocker | Wait Type | Süre |\n"
+            response += "| Blocked | Blocker | Wait Type | Time |\n"
             response += "|---------|---------|-----------|------|\n"
             for b in blocking:
                 response += f"| {b.get('blocked_session', '')} | {b.get('blocking_session', '')} | {b.get('wait_type', '')} | {b.get('wait_seconds', 0)}s |\n"
             
-            response += "\n⚠️ **Öneri:** Blocking session'ları çözmek için KILL komutu veya uygulama tarafını kontrol edin."
+            response += "\n⚠️ **Recommendation:** Consider resolving blockers (e.g., investigate the blocking session, review app behavior, and use KILL only when appropriate)."
             return response
         
         elif intent == Intent.MISSING_INDEXES:
             indexes = data.get("indexes", [])
             if not indexes:
-                return "✅ Eksik index önerisi bulunamadı."
+                return "✅ No missing index recommendations found."
             
-            response = "## 📈 Eksik Index Önerileri\n\n"
+            response = "## 📈 Missing Index Recommendations\n\n"
             for i, idx in enumerate(indexes[:5], 1):
                 response += f"### {i}. {idx.get('table_name', 'N/A')}\n"
                 response += f"- **Equality:** {idx.get('equality_columns', '-')}\n"
                 response += f"- **Inequality:** {idx.get('inequality_columns', '-')}\n"
                 response += f"- **Include:** {idx.get('included_columns', '-')}\n"
-                response += f"- **Seek Sayısı:** {idx.get('user_seeks', 0):,}\n"
-                response += f"- **Tahmini Etki:** %{idx.get('avg_user_impact', 0)}\n\n"
+                response += f"- **Seeks:** {idx.get('user_seeks', 0):,}\n"
+                response += f"- **Estimated Impact:** %{idx.get('avg_user_impact', 0)}\n\n"
             return response
         
         elif intent == Intent.FAILED_JOBS:
             jobs = data.get("jobs", [])
             if not jobs:
-                return "✅ Başarısız job bulunamadı."
+                return "✅ No failed jobs found."
             
-            response = "## ❌ Başarısız Job'lar\n\n"
+            response = "## ❌ Failed Jobs\n\n"
             for j in jobs[:5]:
                 response += f"### {j.get('job_name', 'N/A')}\n"
                 response += f"- **Step:** {j.get('step_name', '')}\n"
-                response += f"- **Zaman:** {j.get('run_time', '')}\n"
-                response += f"- **Hata:** {j.get('error_message', '')[:100]}...\n\n"
+                response += f"- **Time:** {j.get('run_time', '')}\n"
+                response += f"- **Error:** {j.get('error_message', '')[:100]}...\n\n"
             return response
         
         elif intent == Intent.MEMORY_STATUS:
             memory = data.get("memory", {})
-            return f"""## 💾 Memory Durumu
+            return f"""## 💾 Memory Status
 
-| Metrik | Değer |
+| Metric | Value |
 |--------|-------|
-| Kullanılan | {memory.get('used_mb', 0):,} MB |
+| Used | {memory.get('used_mb', 0):,} MB |
 | Memory % | {memory.get('percent', 0)}% |
 | Locked Pages | {memory.get('locked_mb', 0):,} MB |
-| Page Life Expectancy | {memory.get('ple_seconds', 0):,} saniye |
+| Page Life Expectancy | {memory.get('ple_seconds', 0):,} sec |
 
-*PLE 300 saniyenin altındaysa memory baskısı var demektir.*
+*If PLE is below ~300 seconds, memory pressure is likely.*
 """
         
         elif intent == Intent.CPU_STATUS:
             cpu = data.get("cpu", {})
-            return f"""## ⚡ CPU Durumu
+            return f"""## ⚡ CPU Status
 
-| Metrik | Değer |
+| Metric | Value |
 |--------|-------|
-| CPU Kullanımı | {cpu.get('cpu_percent', 0)}% |
+| CPU Usage | {cpu.get('cpu_percent', 0)}% |
 | Batch Requests/sec | {cpu.get('batch_requests', 0):,} |
 
-*CPU sürekli %80+ ise sorgu optimizasyonu veya donanım iyileştirmesi gerekebilir.*
+*If CPU is consistently above ~80%, query optimization and/or hardware improvements may be required.*
 """
         
         elif intent == Intent.BACKUP_STATUS:
             backups = data.get("backups", [])
             if not backups:
-                return "⚠️ Backup bilgisi bulunamadı."
+                return "⚠️ No backup information found."
             
-            response = "## 💿 Backup Durumu\n\n"
-            response += "| Database | Son Full | Son Log | Saat |\n"
+            response = "## 💿 Backup Status\n\n"
+            response += "| Database | Last Full | Last Log | Hours |\n"
             response += "|----------|----------|---------|------|\n"
             for b in backups[:10]:
                 full = str(b.get('last_full', '-'))[:16] if b.get('last_full') else '-'
@@ -667,28 +667,28 @@ Veritabanınız hakkında doğal dilde sorular sorabilirsiniz.
         
         elif intent == Intent.SECURITY_AUDIT:
             security = data.get("security", {})
-            sa_status = "✅ Devre Dışı" if security.get('sa_disabled') else "⚠️ Aktif"
-            return f"""## 🛡️ Güvenlik Özeti
+            sa_status = "✅ Disabled" if security.get('sa_disabled') else "⚠️ Active"
+            return f"""## 🛡️ Security Summary
 
-| Kontrol | Durum |
+| Check | Status |
 |---------|-------|
-| Toplam Login | {security.get('total_logins', 0)} |
-| Sysadmin Sayısı | {security.get('sysadmin_count', 0)} |
-| SA Hesabı | {sa_status} |
+| Total Logins | {security.get('total_logins', 0)} |
+| Sysadmin Count | {security.get('sysadmin_count', 0)} |
+| SA Account | {sa_status} |
 
-*Sysadmin sayısını minimumda tutun ve SA hesabını devre dışı bırakın.*
+*Keep sysadmin membership minimal and disable the SA account where possible.*
 """
         
         elif intent == Intent.GENERAL_QUESTION:
-            return f"""🤔 Sorunuzu anladım: *"{intent_match.original_text}"*
+            return f"""🤔 I understand your question: *\"{intent_match.original_text}\"*
 
-Bu konuda size yardımcı olabilmem için daha spesifik bir soru sorabilir misiniz?
+Could you ask a more specific question so I can help you better?
 
-**Örnek sorular:**
-- "En yavaş sorguları göster"
-- "Wait istatistiklerini analiz et"
-- "Blocking var mı?"
-- "Sunucu durumunu özetle"
+**Example questions:**
+- "Show the slowest queries"
+- "Analyze wait statistics"
+- "Is there blocking?"
+- "Summarize server status"
 """
         
         # Generic response
@@ -696,15 +696,15 @@ Bu konuda size yardımcı olabilmem için daha spesifik bir soru sorabilir misin
     
     def _no_connection_response(self) -> str:
         """Response when not connected to database"""
-        return """⚠️ **Veritabanı Bağlantısı Yok**
+        return """⚠️ **No Database Connection**
 
-Lütfen önce bir SQL Server'a bağlanın:
+Please connect to a SQL Server first:
 
-1. **Settings** → **Connections** bölümüne gidin
-2. Yeni bir bağlantı ekleyin veya mevcut birini seçin
-3. **Connect** butonuna tıklayın
+1. Go to **Settings** → **Connections**
+2. Add a new connection or select an existing one
+3. Click **Connect**
 
-Bağlandıktan sonra sorularınızı yanıtlayabilirim."""
+After connecting, I can answer your questions."""
 
 
 # Singleton

@@ -22,7 +22,7 @@ from app.core.constants import (
 from app.core.config import get_settings, update_settings
 from app.core.logger import get_logger
 from app.database.connection import get_connection_manager
-from app.ui.theme import ThemeManager, apply_theme, Colors
+from app.ui.theme import ThemeManager, apply_theme, Colors, Theme as ThemeStyles
 from app.ui.components.sidebar import Sidebar, DarkSidebar
 from app.ui.views.base_view import BaseView
 from app.ui.views.chat_view import ChatView
@@ -178,48 +178,7 @@ class InfoBar(QFrame):
 
     def _combo_style(self) -> str:
         """ComboBox style for light background - GUI-05 style"""
-        return f"""
-            QComboBox {{
-                background-color: #f7f9fc;
-                border: 1px solid {Colors.BORDER};
-                border-radius: 6px;
-                padding: 4px 10px;
-                color: {Colors.TEXT_PRIMARY};
-                font-size: 11px;
-                min-height: 24px;
-            }}
-            QComboBox:hover {{
-                border-color: {Colors.PRIMARY};
-                background-color: {Colors.SURFACE};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {Colors.TEXT_SECONDARY};
-                margin-right: 6px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {Colors.SURFACE};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 6px;
-                color: {Colors.TEXT_PRIMARY};
-                selection-background-color: {Colors.PRIMARY_LIGHT};
-                selection-color: {Colors.TEXT_PRIMARY};
-                padding: 4px;
-            }}
-            QComboBox QAbstractItemView::item {{
-                padding: 6px 10px;
-                min-height: 24px;
-            }}
-            QComboBox QAbstractItemView::item:hover {{
-                background-color: {Colors.PRIMARY_LIGHT};
-            }}
-        """
+        return ThemeStyles.combobox_style()
 
     def _load_profiles(self) -> None:
         """Load connection profiles into server combo"""
@@ -237,6 +196,12 @@ class InfoBar(QFrame):
             self._server_combo.addItem(display, profile.id)
         
         self._is_loading = False
+
+    def _find_profile_index(self, profile_id: str) -> int:
+        for i in range(self._server_combo.count()):
+            if self._server_combo.itemData(i) == profile_id:
+                return i
+        return -1
 
     def _on_server_changed(self, index: int) -> None:
         """Handle server selection change"""
@@ -310,7 +275,19 @@ class InfoBar(QFrame):
 
     def refresh_profiles(self) -> None:
         """Refresh the profiles list"""
+        current_id = self._current_profile_id
         self._load_profiles()
+        if current_id:
+            index = self._find_profile_index(current_id)
+            if index >= 0:
+                self._is_loading = True
+                self._server_combo.setCurrentIndex(index)
+                self._is_loading = False
+                self._current_profile_id = current_id
+                self._load_databases_for_profile(current_id)
+            else:
+                self._current_profile_id = None
+                self._database_combo.clear()
 
     def set_connected(
         self,
@@ -487,8 +464,9 @@ class MainWindow(QMainWindow):
         if active_conn:
             self.update_connection_status(True, active_conn.profile.server, active_conn.profile.database)
         
-        # Show chat view by default
-        self._navigate_to("chat")
+        # Show first enabled view by default
+        start_view = self._get_first_enabled_view_id()
+        self._navigate_to(start_view or "settings")
         
         logger.info("Main window initialized")
     
@@ -592,6 +570,7 @@ class MainWindow(QMainWindow):
         # Settings changes
         if "settings" in self._views:
             self._views["settings"].settings_changed.connect(self._on_settings_changed)
+            self._views["settings"].connections_changed.connect(self._on_connections_changed)
         
         # Chat messages
         if "chat" in self._views:
@@ -614,11 +593,54 @@ class MainWindow(QMainWindow):
         settings = get_settings()
         apply_theme(settings.ui.theme)
         
+        # Reload LLM providers so the default provider is ready at startup
+        from app.ai.llm_client import get_llm_client
+        get_llm_client().reload_providers()
+        
         # Update info bar model status
         self._info_bar.set_model_status(settings.ai.model)
+        self._apply_navigation_visibility()
+
+    def _get_navigation_visibility(self) -> Dict[str, bool]:
+        """Return merged navigation visibility settings with safe defaults."""
+        defaults = {
+            item.id: True
+            for item in (DarkSidebar.MAIN_NAV_ITEMS + DarkSidebar.TOOLS_NAV_ITEMS)
+        }
+        saved_map = getattr(get_settings().ui, "navigation_visibility", {}) or {}
+        for menu_id in defaults.keys():
+            if menu_id in saved_map:
+                defaults[menu_id] = bool(saved_map.get(menu_id))
+        return defaults
+
+    def _get_first_enabled_view_id(self, visibility: Optional[Dict[str, bool]] = None) -> Optional[str]:
+        """Return first enabled view id according to sidebar order."""
+        visibility = visibility or self._get_navigation_visibility()
+        ordered_ids = [item.id for item in (DarkSidebar.MAIN_NAV_ITEMS + DarkSidebar.TOOLS_NAV_ITEMS)]
+        for view_id in ordered_ids:
+            if visibility.get(view_id, True) and view_id in self._views:
+                return view_id
+        return "settings" if "settings" in self._views else None
+
+    def _apply_navigation_visibility(self) -> None:
+        """Apply menu visibility to sidebar and keep current view valid."""
+        visibility = self._get_navigation_visibility()
+        self._sidebar.set_menu_visibility(visibility)
+
+        if self._current_view_id and self._current_view_id != "settings":
+            if not visibility.get(self._current_view_id, True):
+                fallback = self._get_first_enabled_view_id(visibility)
+                if fallback and fallback != self._current_view_id:
+                    self._navigate_to(fallback)
     
     def _navigate_to(self, view_id: str) -> None:
         """Navigate to a view"""
+        if view_id != "settings":
+            visibility = self._get_navigation_visibility()
+            if not visibility.get(view_id, True):
+                logger.info(f"Navigation blocked for disabled view: {view_id}")
+                return
+
         if view_id not in self._views:
             logger.warning(f"View not found: {view_id}")
             return
@@ -649,6 +671,11 @@ class MainWindow(QMainWindow):
         """Handle settings change"""
         self._apply_settings()
         logger.info("Settings applied")
+
+    def _on_connections_changed(self) -> None:
+        """Refresh server list when connection profiles change"""
+        self._info_bar.refresh_profiles()
+        logger.info("Connection profiles refreshed in info bar")
     
     def _on_chat_message(self, message: str) -> None:
         """Handle chat message from user"""
@@ -682,7 +709,7 @@ class MainWindow(QMainWindow):
         chat_view = self._views.get("chat")
         if chat_view:
             chat_view.remove_loading_indicator()
-            chat_view.add_ai_response(f"⚠️ Bir hata oluştu: {error}")
+            chat_view.add_ai_response(f"⚠️ An error occurred: {error}")
     
     def _on_ai_finished(self) -> None:
         """Handle AI processing finished"""

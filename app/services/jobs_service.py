@@ -146,37 +146,51 @@ class JobsService:
             return summary
         
         conn = self.connection
-        
+
+        # Get summary stats (with permission-safe fallback).
         try:
-            # Get summary stats
             result = conn.execute_query(JobsQueries.JOBS_SUMMARY)
-            if result:
-                row = result[0]
-                summary.total_jobs = row.get('total_jobs', 0) or 0
-                summary.enabled_jobs = row.get('enabled_jobs', 0) or 0
-                summary.disabled_jobs = row.get('disabled_jobs', 0) or 0
-                summary.running_jobs = row.get('running_jobs', 0) or 0
-            
-            # Get failed count
+        except Exception as e:
+            if self._is_sysjobactivity_permission_error(e):
+                logger.warning(
+                    "No SELECT permission on msdb.dbo.sysjobactivity; "
+                    "falling back to jobs summary without running_jobs."
+                )
+                result = conn.execute_query(JobsQueries.JOBS_SUMMARY_NO_ACTIVITY)
+            else:
+                logger.error(f"Error collecting jobs summary stats: {e}")
+                result = []
+
+        if result:
+            row = result[0]
+            summary.total_jobs = row.get('total_jobs', 0) or 0
+            summary.enabled_jobs = row.get('enabled_jobs', 0) or 0
+            summary.disabled_jobs = row.get('disabled_jobs', 0) or 0
+            summary.running_jobs = row.get('running_jobs', 0) or 0
+
+        # Get failed count.
+        try:
             failed_result = conn.execute_query(JobsQueries.FAILED_JOBS_COUNT)
             if failed_result:
                 summary.failed_24h = failed_result[0].get('failed_job_count', 0) or 0
-            
-            # Get all jobs
-            summary.jobs = self._get_all_jobs(conn)
-            
-            # Get failed jobs
-            summary.failed_jobs = self._get_failed_jobs(conn)
-            
-            # Get running jobs
-            summary.running_jobs_list = self._get_running_jobs(conn)
-            
-            summary.collected_at = datetime.now()
-            
         except Exception as e:
-            logger.error(f"Error collecting jobs summary: {e}")
+            logger.warning(f"Error getting failed jobs count: {e}")
+
+        # Get detail lists. These methods already degrade gracefully.
+        summary.jobs = self._get_all_jobs(conn)
+        summary.failed_jobs = self._get_failed_jobs(conn)
+        summary.running_jobs_list = self._get_running_jobs(conn)
+        summary.collected_at = datetime.now()
         
         return summary
+
+    @staticmethod
+    def _is_sysjobactivity_permission_error(error: Exception) -> bool:
+        text = str(error or "").lower()
+        return (
+            "sysjobactivity" in text
+            and ("permission was denied" in text or "(229)" in text)
+        )
     
     def _get_all_jobs(self, conn) -> List[Job]:
         """Get all jobs"""

@@ -39,7 +39,7 @@ class WaitCategoryCard(QFrame):
     
     def _setup_ui(self):
         self.setStyleSheet("background-color: transparent; border: none;")
-        self.setFixedSize(100, 115)  # Fixed size for consistent layout
+        self.setFixedSize(108, 124)  # Fixed size for consistent layout (+8%)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 0, 5, 0)
@@ -48,12 +48,12 @@ class WaitCategoryCard(QFrame):
         
         # Circle
         circle = QFrame()
-        circle.setFixedSize(90, 90)
+        circle.setFixedSize(98, 98)
         circle.setStyleSheet(f"""
             QFrame {{
                 background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.BORDER};
-                border-radius: 45px;
+                border-radius: 49px;
             }}
         """)
         circle_layout = QVBoxLayout(circle)
@@ -97,6 +97,8 @@ class WaitStatRow(QFrame):
         self._setup_ui()
     
     def _setup_ui(self):
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(56)
         self.setStyleSheet(f"""
             QFrame {{
                 background: {Colors.SURFACE};
@@ -174,8 +176,6 @@ class WaitStatsView(BaseView):
         self._service = get_wait_stats_service()
         self._category_cards: Dict[WaitCategory, WaitCategoryCard] = {}
         self._summary_cards: Dict[str, QFrame] = {}
-        self._refresh_timer = QTimer(self)
-        self._refresh_timer.timeout.connect(self.refresh)
     
     def _setup_ui(self):
         # Title section
@@ -305,7 +305,15 @@ class WaitStatsView(BaseView):
         self._waits_layout.addWidget(placeholder)
         
         self._waits_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._main_layout.addWidget(self._waits_container, stretch=1)
+        
+        # Scroll area for waits list (prevents row compression on smaller windows)
+        self._waits_scroll = QScrollArea()
+        self._waits_scroll.setWidgetResizable(True)
+        self._waits_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._waits_scroll.setStyleSheet("background: transparent;")
+        self._waits_scroll.setWidget(self._waits_container)
+        
+        self._main_layout.addWidget(self._waits_scroll, stretch=1)
     
     def _create_summary_card(self, icon: str, label: str, value: str) -> CircleStatCard:
         """Create a circle summary stat card - GUI-05 style"""
@@ -326,11 +334,10 @@ class WaitStatsView(BaseView):
     def on_show(self) -> None:
         """Called when view becomes visible"""
         self.refresh()
-        self._refresh_timer.start(15000)  # Refresh every 15 seconds
     
     def on_hide(self) -> None:
         """Called when view is hidden"""
-        self._refresh_timer.stop()
+        pass
     
     def refresh(self) -> None:
         """Refresh wait statistics"""

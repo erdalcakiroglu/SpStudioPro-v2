@@ -7,6 +7,7 @@ AI-Powered SQL Server Performance Analysis and Optimization Tool
 import sys
 import os
 from pathlib import Path
+import PyQt6
 
 # Add app to path for imports
 APP_DIR = Path(__file__).parent

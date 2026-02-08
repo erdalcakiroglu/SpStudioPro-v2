@@ -14,6 +14,46 @@ A professional desktop application for DBA's and developers to analyze SQL Serve
 - **Security Analysis**: SQL code security scanning
 - **Code Comparison**: Side-by-side before/after optimization view
 
+## AI Tune Akisi (Object Explorer)
+
+Object Explorer icinde bir SP icin `AI Tune` calistirildiginda uygulamanin yaptigi isler:
+
+1. Context menu aksiyonu `_ai_tune_object` tetiklenir ve secili obje + DB dogrulanir.
+2. `_collect_object_info` ile SP baglam verileri toplanir.
+3. `sys.sql_modules` uzerinden source code cekilir.
+4. DMV `sys.dm_exec_query_stats` ile execution istatistikleri toplanir.
+5. `sys.dm_db_missing_index_*` uzerinden missing index onerileri cekilir.
+6. Bagimliliklar (dependencies) bulunur.
+7. Query Store aktifse ozet metrikler, waits, top statements ve plan XML denenir.
+8. Query Store plan yoksa cached plan XML (DMV) ile fallback yapilir.
+9. `AITuneDialog` acilir ve analiz otomatik baslar.
+10. `AIAnalysisService.analyze_sp` cagrisi ile AI analizi yapilir.
+11. Hata olursa fallback rapor uretilir.
+12. Opsiyonel: `Kod Optimize Et` butonu ile `optimize_sp` cagrilir.
+
+### Sequence Diagram
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant OE as ObjectExplorerView
+  participant COL as _collect_object_info
+  participant AID as AITuneDialog
+  participant W as AITuneWorker
+  participant AI as AIAnalysisService
+
+  U->>OE: Right click SP -> "AI Tune"
+  OE->>OE: _ai_tune_object()
+  OE->>COL: Collect source, stats, indexes, deps
+  COL-->>OE: object_info
+  OE->>AID: AITuneDialog(object_info)
+  AID->>W: start analyze worker
+  W->>AI: analyze_sp(context)
+  AI-->>W: analysis result
+  W-->>AID: analysis_ready(result)
+  AID-->>U: Show analysis
+```
+
 ## Technology Stack
 
 | Category | Technology |

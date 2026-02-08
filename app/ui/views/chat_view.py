@@ -133,34 +133,34 @@ class ChatView(BaseView):
     
     # Quick action suggestions - grouped by category
     QUICK_ACTIONS = [
-        "📊  Top Sorgular",
+        "📊  Top Queries",
         "⏱️  Wait Stats",
         "🔒  Blocking",
-        "📈  Index Önerileri",
-        "💾  Memory Durumu",
+        "📈  Index Recommendations",
+        "💾  Memory Status",
     ]
     
     # Example queries for help
     EXAMPLE_QUERIES = [
-        ("Performans", [
-            "En yavaş 10 sorguyu göster",
-            "CPU kullanımı yüksek sorgular",
-            "Son 1 saatte en çok çalışan sorgular",
+        ("Performance", [
+            "Show the 10 slowest queries",
+            "Queries with high CPU usage",
+            "Most frequently executed queries in the last hour",
         ]),
         ("Wait Stats", [
-            "Top wait istatistiklerini göster",
-            "PAGEIOLATCH beklemeleri analiz et",
-            "Signal wait oranı nedir?",
+            "Show top wait statistics",
+            "Analyze PAGEIOLATCH waits",
+            "What is the signal wait ratio?",
         ]),
         ("Index", [
-            "Eksik index önerilerini listele",
-            "Kullanılmayan index'leri bul",
-            "Index fragmentation durumu",
+            "List missing index recommendations",
+            "Find unused indexes",
+            "Index fragmentation status",
         ]),
-        ("Genel", [
-            "Sunucu durumunu özetle",
-            "Blocking session var mı?",
-            "Son backup ne zaman alındı?",
+        ("General", [
+            "Summarize server status",
+            "Are there any blocking sessions?",
+            "When was the last backup taken?",
         ]),
     ]
     
@@ -339,7 +339,7 @@ class ChatView(BaseView):
         examples_layout.setContentsMargins(0, 0, 0, 0)
         examples_layout.setSpacing(16)
         
-        examples_title = QLabel("💡 Örnek Sorgular")
+        examples_title = QLabel("💡 Example Queries")
         examples_title.setStyleSheet(f"""
             color: {Colors.TEXT_SECONDARY};
             font-size: 14px;
@@ -615,7 +615,7 @@ class ChatView(BaseView):
         layout.setSpacing(8)
         
         # Animated dots
-        self._loading_label = QLabel("AI düşünüyor")
+        self._loading_label = QLabel("AI is thinking...")
         self._loading_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 13px; border: none;")
         layout.addWidget(self._loading_label)
         

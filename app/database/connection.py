@@ -107,9 +107,14 @@ class DatabaseConnection:
         if not driver:
             raise ConnectionError("No SQL Server ODBC driver found")
 
-        server = self.profile.server
-        if "\\" in server:
-            server_value = server if self.profile.port == 1433 else f"{server},{self.profile.port}"
+        server = (self.profile.server or "").strip()
+        if "," in server:
+            server_value = server
+        elif "\\" in server and self.profile.port != 1433:
+            host = server.split("\\", 1)[0]
+            server_value = f"tcp:{host},{self.profile.port}"
+        elif "\\" in server:
+            server_value = server
         else:
             server_value = f"{server},{self.profile.port}"
         

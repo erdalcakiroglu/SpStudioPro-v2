@@ -20,9 +20,11 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QGridLayout,
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -40,6 +42,7 @@ from app.models.connection_profile import ConnectionProfile
 from app.services.connection_store import get_connection_store
 from app.services.credential_store import get_credential_store
 from app.database.connection import DatabaseConnection, AuthenticationError, ConnectionError as DBConnectionError, get_available_odbc_drivers, get_connection_manager
+from app.ui.components.sidebar import DarkSidebar
 from app.ui.views.base_view import BaseView
 
 logger = get_logger("ui.settings")
@@ -231,55 +234,76 @@ class LLMProviderWidget(QWidget):
     test_requested = pyqtSignal(str)  # provider_id
     remove_requested = pyqtSignal(str)  # provider_id
     set_default_requested = pyqtSignal(str)  # provider_id
+    config_changed = pyqtSignal(str)  # provider_id
 
     def __init__(self, provider_id: str, config: Dict[str, Any], is_default: bool = False, parent=None):
         super().__init__(parent)
         self.provider_id = provider_id
         self.config = config
         self.is_default = is_default
+        self._display_name = config.get("name", provider_id)
         self._setup_ui()
 
     def _setup_ui(self):
         """Setup provider configuration UI"""
+        self.setObjectName("ProviderCard")
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
 
         # Header with provider type and remove button
         header_layout = QHBoxLayout()
+        header_layout.setSpacing(8)
 
         provider_type = self.config.get("type", "ollama")
+        header_left = QWidget()
+        header_left_layout = QVBoxLayout(header_left)
+        header_left_layout.setContentsMargins(0, 0, 0, 0)
+        header_left_layout.setSpacing(2)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+
         self.header_label = QLabel()
+        self.header_label.setObjectName("ProviderTitle")
+        title_row.addWidget(self.header_label)
+
+        self._default_badge = QLabel("DEFAULT")
+        self._default_badge.setObjectName("ProviderBadge")
+        self._default_badge.setVisible(self.is_default)
+        title_row.addWidget(self._default_badge)
+        title_row.addStretch()
+
+        self._subtitle_label = QLabel()
+        self._subtitle_label.setObjectName("ProviderSubtitle")
+        header_left_layout.addLayout(title_row)
+        header_left_layout.addWidget(self._subtitle_label)
+
         self._update_header_label()
-        header_layout.addWidget(self.header_label)
+        header_layout.addWidget(header_left, 1)
 
         header_layout.addStretch()
 
         # Default button
         self.default_btn = QPushButton("Set as Default")
-        self.default_btn.setFixedWidth(100)
+        self.default_btn.setObjectName("SmallGhostButton")
+        self.default_btn.setFixedWidth(110)
         self.default_btn.clicked.connect(lambda: self.set_default_requested.emit(self.provider_id))
         self.default_btn.setVisible(not self.is_default)
         header_layout.addWidget(self.default_btn)
 
         # Test button
-        self.test_btn = QPushButton("Test")
-        self.test_btn.setFixedWidth(80)
+        self.test_btn = QPushButton("Test Connection")
+        self.test_btn.setObjectName("SmallGhostButton")
+        self.test_btn.setFixedWidth(130)
         self.test_btn.clicked.connect(lambda: self.test_requested.emit(self.provider_id))
         header_layout.addWidget(self.test_btn)
 
         # Remove button
         remove_btn = QPushButton("Remove")
         remove_btn.setFixedWidth(80)
-        remove_btn.setStyleSheet("""
-            QPushButton { 
-                color: #EF4444; 
-                border: 1px solid #EF4444;
-                background-color: white;
-            }
-            QPushButton:hover {
-                background-color: #EF4444;
-                color: white;
-            }
-        """)
+        remove_btn.setObjectName("SmallDangerButton")
         remove_btn.clicked.connect(lambda: self.remove_requested.emit(self.provider_id))
         header_layout.addWidget(remove_btn)
 
@@ -287,9 +311,16 @@ class LLMProviderWidget(QWidget):
 
         # Configuration form
         form_layout = QFormLayout()
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form_layout.setHorizontalSpacing(14)
+        form_layout.setVerticalSpacing(10)
 
         # Common fields
         self.name_edit = QLineEdit(self.config.get("name", self.provider_id))
+        self.name_edit.setPlaceholderText("Provider name (e.g. Local Ollama)")
+        self.name_edit.textChanged.connect(self._update_header_label)
+        self.name_edit.textChanged.connect(lambda: self.config_changed.emit(self.provider_id))
         form_layout.addRow("Name:", self.name_edit)
 
         # Provider-specific fields
@@ -309,6 +340,8 @@ class LLMProviderWidget(QWidget):
         # Test result area
         self.test_result = QTextEdit()
         self.test_result.setMaximumHeight(60)
+        self.test_result.setReadOnly(True)
+        self.test_result.setObjectName("ProviderTestResult")
         self.test_result.setVisible(False)
         layout.addWidget(self.test_result)
 
@@ -321,11 +354,15 @@ class LLMProviderWidget(QWidget):
     def _update_header_label(self):
         """Update header label with default status"""
         provider_type = self.config.get("type", "ollama")
-        status = " (DEFAULT)" if self.is_default else ""
-        self.header_label.setText(f"🤖 {provider_type.upper()} - {self.provider_id}{status}")
+        display_name = self._display_name
+        if hasattr(self, "name_edit"):
+            current_name = self.name_edit.text().strip()
+            display_name = current_name or self._display_name
+        self.header_label.setText(f"{provider_type.upper()} - {display_name}")
         self.header_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self._subtitle_label.setText(f"ID: {self.provider_id}")
         if self.is_default:
-            self.header_label.setStyleSheet("color: #10B981;")  # Green for default
+            self.header_label.setStyleSheet("color: #0F172A;")
         else:
             self.header_label.setStyleSheet("color: #0F172A;")
 
@@ -333,6 +370,7 @@ class LLMProviderWidget(QWidget):
         """Update default status"""
         self.is_default = is_default
         self.default_btn.setVisible(not is_default)
+        self._default_badge.setVisible(is_default)
         self._update_header_label()
 
     def _setup_ollama_fields(self, form_layout):
@@ -521,6 +559,304 @@ class LLMProviderWidget(QWidget):
             self.test_result.setStyleSheet("color: #EF4444; background-color: #FEF2F2; border: 1px solid #FCA5A5; border-radius: 8px;")
 
 
+class AddAIModelDialog(QDialog):
+    """Dialog for adding/editing an AI model/provider."""
+
+    def __init__(self, parent=None, config: Optional[Dict[str, Any]] = None, provider_id: Optional[str] = None):
+        super().__init__(parent)
+        self._test_worker = None
+        self._config: Dict[str, Any] = {}
+        self._initial_config = config or {}
+        self._provider_id = provider_id
+        self._is_edit = config is not None
+        self._remove_requested = False
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        title = "Edit AI Model" if self._is_edit else "Add AI Model"
+        self.setWindowTitle(title)
+        self.setMinimumWidth(520)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        header = QLabel(title)
+        header.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        layout.addWidget(header)
+
+        form_layout = QFormLayout()
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form_layout.setHorizontalSpacing(12)
+        form_layout.setVerticalSpacing(10)
+
+        self._type_combo = QComboBox()
+        self._type_combo.addItem("Ollama", LLMProvider.OLLAMA.value)
+        self._type_combo.addItem("OpenAI", LLMProvider.OPENAI.value)
+        self._type_combo.addItem("Anthropic", LLMProvider.ANTHROPIC.value)
+        self._type_combo.addItem("Azure OpenAI", LLMProvider.AZURE_OPENAI.value)
+        self._type_combo.addItem("DeepSeek", LLMProvider.DEEPSEEK.value)
+        self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+        if self._is_edit:
+            self._type_combo.setEnabled(False)
+        form_layout.addRow("Provider:", self._type_combo)
+
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("Provider name (e.g. Local Ollama)")
+        form_layout.addRow("Name:", self._name_edit)
+
+        self._model_edit = QLineEdit()
+        self._model_edit.setPlaceholderText("Model (e.g. codellama, gpt-4o)")
+        form_layout.addRow("Model:", self._model_edit)
+
+        layout.addLayout(form_layout)
+
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._create_ollama_fields())
+        self._stack.addWidget(self._create_openai_fields())
+        self._stack.addWidget(self._create_anthropic_fields())
+        self._stack.addWidget(self._create_azure_fields())
+        self._stack.addWidget(self._create_deepseek_fields())
+        layout.addWidget(self._stack)
+
+        self._test_result = QTextEdit()
+        self._test_result.setReadOnly(True)
+        self._test_result.setMaximumHeight(80)
+        self._test_result.setVisible(False)
+        layout.addWidget(self._test_result)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        self._test_btn = QPushButton("Test")
+        self._test_btn.clicked.connect(self._on_test_clicked)
+        buttons.addWidget(self._test_btn)
+
+        if self._is_edit:
+            remove_btn = QPushButton("Remove")
+            remove_btn.setObjectName("dangerButton")
+            remove_btn.clicked.connect(self._on_remove_clicked)
+            buttons.addWidget(remove_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(cancel_btn)
+
+        add_btn = QPushButton("Save" if self._is_edit else "Add")
+        add_btn.setObjectName("primaryButton")
+        add_btn.clicked.connect(self._on_add_clicked)
+        buttons.addWidget(add_btn)
+        layout.addLayout(buttons)
+
+        self._on_type_changed()
+        if self._is_edit:
+            self._load_from_config(self._initial_config)
+
+    def _create_ollama_fields(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        self._ollama_host = QLineEdit("http://localhost:11434")
+        layout.addRow("Host:", self._ollama_host)
+        return widget
+
+    def _create_openai_fields(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        openai_key_row, self._openai_key = self._create_api_key_row(
+            "Enter OpenAI API Key (sk-...)"
+        )
+        layout.addRow("API Key:", openai_key_row)
+        return widget
+
+    def _create_anthropic_fields(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        anthropic_key_row, self._anthropic_key = self._create_api_key_row(
+            "Enter Anthropic API Key (sk-ant-...)"
+        )
+        layout.addRow("API Key:", anthropic_key_row)
+        return widget
+
+    def _create_azure_fields(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        azure_key_row, self._azure_key = self._create_api_key_row(
+            "Enter Azure OpenAI API Key"
+        )
+        layout.addRow("API Key:", azure_key_row)
+        self._azure_endpoint = QLineEdit()
+        self._azure_endpoint.setPlaceholderText("https://your-resource.openai.azure.com")
+        layout.addRow("Endpoint:", self._azure_endpoint)
+        self._azure_deployment = QLineEdit()
+        layout.addRow("Deployment:", self._azure_deployment)
+        return widget
+
+    def _create_deepseek_fields(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        deepseek_key_row, self._deepseek_key = self._create_api_key_row(
+            "Enter DeepSeek API Key"
+        )
+        layout.addRow("API Key:", deepseek_key_row)
+        return widget
+
+    def _create_api_key_row(self, placeholder: str) -> tuple[QWidget, QLineEdit]:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        key_edit = QLineEdit()
+        key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        key_edit.setPlaceholderText(placeholder)
+        layout.addWidget(key_edit)
+
+        show_check = QCheckBox("Show")
+        show_check.toggled.connect(
+            lambda checked, edit=key_edit: self._toggle_password_visibility(checked, edit)
+        )
+        layout.addWidget(show_check)
+
+        return container, key_edit
+
+    def _toggle_password_visibility(self, checked: bool, line_edit: QLineEdit) -> None:
+        if checked:
+            line_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+        else:
+            line_edit.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def _load_from_config(self, config: Dict[str, Any]) -> None:
+        provider_type = config.get("type", LLMProvider.OLLAMA.value)
+        idx = self._type_combo.findData(provider_type)
+        if idx >= 0:
+            self._type_combo.setCurrentIndex(idx)
+
+        name = config.get("name")
+        if name:
+            self._name_edit.setText(name)
+
+        model = config.get("model")
+        if model:
+            self._model_edit.setText(model)
+
+        if provider_type == LLMProvider.OLLAMA.value:
+            self._ollama_host.setText(config.get("host", "http://localhost:11434"))
+        elif provider_type == LLMProvider.OPENAI.value:
+            self._openai_key.setText(config.get("api_key", ""))
+        elif provider_type == LLMProvider.ANTHROPIC.value:
+            self._anthropic_key.setText(config.get("api_key", ""))
+        elif provider_type == LLMProvider.AZURE_OPENAI.value:
+            self._azure_key.setText(config.get("api_key", ""))
+            self._azure_endpoint.setText(config.get("endpoint", ""))
+            self._azure_deployment.setText(config.get("deployment", ""))
+        elif provider_type == LLMProvider.DEEPSEEK.value:
+            self._deepseek_key.setText(config.get("api_key", ""))
+
+    def _on_type_changed(self) -> None:
+        provider_type = self._type_combo.currentData()
+        if provider_type == LLMProvider.OLLAMA.value:
+            self._stack.setCurrentIndex(0)
+            if not self._model_edit.text().strip():
+                self._model_edit.setText("codellama")
+        elif provider_type == LLMProvider.OPENAI.value:
+            self._stack.setCurrentIndex(1)
+            if not self._model_edit.text().strip():
+                self._model_edit.setText("gpt-4o")
+        elif provider_type == LLMProvider.ANTHROPIC.value:
+            self._stack.setCurrentIndex(2)
+            if not self._model_edit.text().strip():
+                self._model_edit.setText("claude-3-5-sonnet-20241022")
+        elif provider_type == LLMProvider.AZURE_OPENAI.value:
+            self._stack.setCurrentIndex(3)
+            if not self._model_edit.text().strip():
+                self._model_edit.setText("gpt-4o")
+        elif provider_type == LLMProvider.DEEPSEEK.value:
+            self._stack.setCurrentIndex(4)
+            if not self._model_edit.text().strip():
+                self._model_edit.setText("deepseek-chat")
+
+    def _build_config(self) -> Dict[str, Any]:
+        provider_type = self._type_combo.currentData()
+        name = self._name_edit.text().strip()
+        model = self._model_edit.text().strip()
+
+        config = {
+            "type": provider_type,
+            "name": name,
+            "model": model,
+        }
+
+        if provider_type == LLMProvider.OLLAMA.value:
+            config.update({"host": self._ollama_host.text().strip()})
+        elif provider_type == LLMProvider.OPENAI.value:
+            config.update({"api_key": self._openai_key.text().strip()})
+        elif provider_type == LLMProvider.ANTHROPIC.value:
+            config.update({"api_key": self._anthropic_key.text().strip()})
+        elif provider_type == LLMProvider.AZURE_OPENAI.value:
+            config.update({
+                "api_key": self._azure_key.text().strip(),
+                "endpoint": self._azure_endpoint.text().strip(),
+                "deployment": self._azure_deployment.text().strip(),
+            })
+        elif provider_type == LLMProvider.DEEPSEEK.value:
+            config.update({"api_key": self._deepseek_key.text().strip()})
+
+        return config
+
+    def _on_test_clicked(self) -> None:
+        if self._test_worker and self._test_worker.isRunning():
+            return
+
+        config = self._build_config()
+        if not config.get("name"):
+            config["name"] = f"{config.get('type', 'provider').title()} Provider"
+
+        self._test_worker = LLMTestWorker(config)
+        self._test_worker.test_completed.connect(self._on_test_completed)
+        self._test_worker.start()
+
+        self._test_btn.setEnabled(False)
+        self._test_btn.setText("Testing...")
+
+    @pyqtSlot(str, bool, str)
+    def _on_test_completed(self, _provider_id: str, success: bool, message: str) -> None:
+        self._test_btn.setEnabled(True)
+        self._test_btn.setText("Test")
+        self._test_result.setVisible(True)
+        self._test_result.setPlainText(message)
+
+        if success:
+            self._test_result.setStyleSheet("color: #10B981; background-color: #F0FDF4; border: 1px solid #86EFAC; border-radius: 8px;")
+        else:
+            self._test_result.setStyleSheet("color: #EF4444; background-color: #FEF2F2; border: 1px solid #FCA5A5; border-radius: 8px;")
+
+    def _on_add_clicked(self) -> None:
+        config = self._build_config()
+        if not config.get("name"):
+            config["name"] = f"{config.get('type', 'provider').title()} Provider"
+        if not config.get("model"):
+            QMessageBox.warning(self, "Missing Model", "Please enter a model name.")
+            return
+        self._config = config
+        self.accept()
+
+    def _on_remove_clicked(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Remove Provider",
+            "Are you sure you want to remove this provider?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._remove_requested = True
+            self.accept()
+
+    def get_config(self) -> Dict[str, Any]:
+        return self._config
+
+    def is_remove_requested(self) -> bool:
+        return self._remove_requested
+
+
 class ConnectionEditDialog(QDialog):
     """Dialog for adding or editing a database connection"""
 
@@ -686,13 +1022,22 @@ class SettingsView(BaseView):
     """
 
     settings_changed = pyqtSignal()
+    connections_changed = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._test_worker = None
-        self._llm_providers: Dict[str, LLMProviderWidget] = {}
+        self._llm_providers: Dict[str, Dict[str, Any]] = {}
         self._provider_counter = 1
         self._active_provider_id = "default_ollama"
+        self._menu_visibility_checks: Dict[str, QCheckBox] = {}
+
+    @staticmethod
+    def _default_navigation_visibility() -> Dict[str, bool]:
+        """Default visibility map for sidebar navigation items."""
+        return {
+            item.id: True
+            for item in (DarkSidebar.MAIN_NAV_ITEMS + DarkSidebar.TOOLS_NAV_ITEMS)
+        }
 
     @property
     def view_title(self) -> str:
@@ -700,7 +1045,7 @@ class SettingsView(BaseView):
 
     def _apply_modern_styles(self) -> None:
         """Apply modern light theme styles"""
-        from app.ui.theme import Colors
+        from app.ui.theme import Colors, Theme as ThemeStyles
         
         self.setStyleSheet(f"""
             /* Background */
@@ -761,6 +1106,23 @@ class SettingsView(BaseView):
                 color: {Colors.TEXT_PRIMARY};
                 background: transparent;
             }}
+            QLabel#ProviderTitle {{
+                font-size: 13px;
+                font-weight: 600;
+                color: {Colors.TEXT_PRIMARY};
+            }}
+            QLabel#ProviderSubtitle {{
+                font-size: 11px;
+                color: {Colors.TEXT_SECONDARY};
+            }}
+            QLabel#ProviderBadge {{
+                background-color: {Colors.PRIMARY_LIGHT};
+                color: {Colors.PRIMARY};
+                border-radius: 8px;
+                padding: 2px 6px;
+                font-size: 10px;
+                font-weight: 600;
+            }}
             
             /* LineEdit */
             QLineEdit {{
@@ -782,29 +1144,7 @@ class SettingsView(BaseView):
             }}
             
             /* ComboBox */
-            QComboBox {{
-                background-color: {Colors.SURFACE};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 10px 14px;
-                color: {Colors.TEXT_PRIMARY};
-                min-height: 20px;
-            }}
-            QComboBox:hover {{
-                border-color: {Colors.PRIMARY};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                padding-right: 10px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {Colors.SURFACE};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                selection-background-color: {Colors.PRIMARY}18;
-                color: {Colors.TEXT_PRIMARY};
-                padding: 4px;
-            }}
+            {ThemeStyles.combobox_style()}
             
             /* SpinBox */
             QSpinBox {{
@@ -869,6 +1209,23 @@ class SettingsView(BaseView):
                 background-color: {Colors.ERROR};
                 color: white;
             }}
+            QPushButton#SmallGhostButton {{
+                padding: 6px 10px;
+                border-radius: 6px;
+                font-size: 11px;
+            }}
+            QPushButton#SmallDangerButton {{
+                padding: 6px 10px;
+                border-radius: 6px;
+                font-size: 11px;
+                border: 1px solid {Colors.ERROR};
+                color: {Colors.ERROR};
+                background-color: {Colors.SURFACE};
+            }}
+            QPushButton#SmallDangerButton:hover {{
+                background-color: {Colors.ERROR};
+                color: white;
+            }}
             
             /* TextEdit */
             QTextEdit {{
@@ -877,6 +1234,10 @@ class SettingsView(BaseView):
                 border-radius: 8px;
                 padding: 8px;
                 color: {Colors.TEXT_PRIMARY};
+            }}
+            QTextEdit#ProviderTestResult {{
+                font-size: 11px;
+                padding: 8px 10px;
             }}
             
             /* TableWidget */
@@ -890,10 +1251,14 @@ class SettingsView(BaseView):
             QTableWidget::item {{
                 padding: 8px;
                 color: {Colors.TEXT_PRIMARY};
+                border-bottom: 1px solid {Colors.BORDER};
             }}
             QTableWidget::item:selected {{
                 background-color: {Colors.PRIMARY}18;
-                color: {Colors.PRIMARY};
+                color: {Colors.TEXT_PRIMARY};
+            }}
+            QTableWidget::item:hover {{
+                background-color: {Colors.PRIMARY}10;
             }}
             QHeaderView::section {{
                 background-color: #F8FAFC;
@@ -911,6 +1276,13 @@ class SettingsView(BaseView):
             }}
             QScrollArea > QWidget > QWidget {{
                 background-color: transparent;
+            }}
+
+            /* Provider cards */
+            QWidget#ProviderCard {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 12px;
             }}
             
             /* ScrollBar */
@@ -985,7 +1357,16 @@ class SettingsView(BaseView):
     def _create_general_tab(self) -> QWidget:
         """Create general settings tab"""
         widget = QWidget()
-        layout = QVBoxLayout(widget)
+        root_layout = QVBoxLayout(widget)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setSpacing(16)
 
         # Language group
@@ -994,8 +1375,8 @@ class SettingsView(BaseView):
 
         self._language_combo = QComboBox()
         self._language_combo.addItem("English", Language.ENGLISH.value)
-        self._language_combo.addItem("Türkçe", Language.TURKISH.value)
-        self._language_combo.addItem("Deutsch", Language.GERMAN.value)
+        # Other UI languages will be added later.
+        self._language_combo.setEnabled(False)
         lang_layout.addRow("Interface Language:", self._language_combo)
 
         layout.addWidget(lang_group)
@@ -1013,6 +1394,61 @@ class SettingsView(BaseView):
 
         layout.addWidget(startup_group)
 
+        # Navigation menu visibility
+        nav_group = QGroupBox("Navigation Menu")
+        nav_layout = QVBoxLayout(nav_group)
+        nav_layout.setContentsMargins(12, 8, 12, 10)
+        nav_layout.setSpacing(6)
+
+        self._menu_visibility_checks.clear()
+        main_items = list(DarkSidebar.MAIN_NAV_ITEMS)
+        tools_items = list(DarkSidebar.TOOLS_NAV_ITEMS)
+        if not (main_items or tools_items):
+            # Fallback safety: should never happen, but prevents empty UI.
+            fallback_items = [
+                type("Item", (), {"id": k, "label": k.replace("_", " ").title()})
+                for k in self._default_navigation_visibility().keys()
+            ]
+            main_items = fallback_items
+            tools_items = []
+
+        main_label = QLabel("MAIN MENU")
+        main_label.setStyleSheet("color: #8b93a2; font-size: 10px; font-weight: 700; letter-spacing: 1px;")
+        nav_layout.addWidget(main_label)
+
+        main_grid = QGridLayout()
+        main_grid.setContentsMargins(0, 0, 0, 0)
+        main_grid.setHorizontalSpacing(18)
+        main_grid.setVerticalSpacing(8)
+        for idx, item in enumerate(main_items):
+            check = QCheckBox(item.label)
+            check.setChecked(True)
+            self._menu_visibility_checks[item.id] = check
+            row = idx // 3
+            col = idx % 3
+            main_grid.addWidget(check, row, col)
+        nav_layout.addLayout(main_grid)
+
+        if tools_items:
+            tools_label = QLabel("TOOLS")
+            tools_label.setStyleSheet("color: #8b93a2; font-size: 10px; font-weight: 700; letter-spacing: 1px;")
+            nav_layout.addWidget(tools_label)
+
+            tools_grid = QGridLayout()
+            tools_grid.setContentsMargins(0, 0, 0, 0)
+            tools_grid.setHorizontalSpacing(18)
+            tools_grid.setVerticalSpacing(8)
+            for idx, item in enumerate(tools_items):
+                check = QCheckBox(item.label)
+                check.setChecked(True)
+                self._menu_visibility_checks[item.id] = check
+                row = idx // 3
+                col = idx % 3
+                tools_grid.addWidget(check, row, col)
+            nav_layout.addLayout(tools_grid)
+
+        layout.addWidget(nav_group)
+
         # Application info
         info_group = QGroupBox("Application Info")
         info_layout = QFormLayout(info_group)
@@ -1029,6 +1465,8 @@ class SettingsView(BaseView):
         layout.addWidget(info_group)
 
         layout.addStretch()
+        scroll.setWidget(content)
+        root_layout.addWidget(scroll)
         return widget
 
     def _create_ai_tab(self) -> QWidget:
@@ -1037,59 +1475,82 @@ class SettingsView(BaseView):
         layout = QVBoxLayout(widget)
         layout.setSpacing(16)
 
+        # Inner tabs for AI/LLM section
+        ai_tabs = QTabWidget()
+        ai_tabs.addTab(self._create_ai_providers_tab(), "Providers")
+        ai_tabs.addTab(self._create_ai_prompt_rules_tab(), "AI Prompt Rules")
+        layout.addWidget(ai_tabs)
+
+        return widget
+
+    def _create_ai_providers_tab(self) -> QWidget:
+        """Create the LLM providers management tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setSpacing(16)
+
         # Header with add button
         header_layout = QHBoxLayout()
         header_label = QLabel("🤖 LLM Providers")
-        header_label.setFont(QFont("", 14, QFont.Weight.Bold))
+        header_label.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
         header_layout.addWidget(header_label)
 
         header_layout.addStretch()
 
-        # Add provider dropdown and button
-        self._add_provider_combo = QComboBox()
-        self._add_provider_combo.addItem("Add Ollama Provider", LLMProvider.OLLAMA.value)
-        self._add_provider_combo.addItem("Add OpenAI Provider", LLMProvider.OPENAI.value)
-        self._add_provider_combo.addItem("Add Anthropic Provider", LLMProvider.ANTHROPIC.value)
-        self._add_provider_combo.addItem("Add Azure OpenAI", LLMProvider.AZURE_OPENAI.value)
-        self._add_provider_combo.addItem("Add DeepSeek Provider", LLMProvider.DEEPSEEK.value)
-        header_layout.addWidget(self._add_provider_combo)
-
-        add_btn = QPushButton("Add Provider")
+        add_btn = QPushButton("Add AI Model")
+        add_btn.setObjectName("primaryButton")
         add_btn.clicked.connect(self._add_provider)
         header_layout.addWidget(add_btn)
 
         layout.addLayout(header_layout)
 
-        # Providers container (scrollable)
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        header_help = QLabel("Add and manage AI providers. Exactly one provider should be set as default.")
+        header_help.setStyleSheet("color: #64748b; font-size: 11px;")
+        layout.addWidget(header_help)
 
-        self._providers_widget = QWidget()
-        self._providers_layout = QVBoxLayout(self._providers_widget)
-        self._providers_layout.addStretch()
+        # Providers list
+        self._provider_table = QTableWidget()
+        self._provider_table.setColumnCount(4)
+        self._provider_table.setHorizontalHeaderLabels(["Default", "Name", "Type", "Model"])
+        self._provider_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._provider_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._provider_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._provider_table.setMinimumHeight(140)
+        self._provider_table.cellDoubleClicked.connect(self._edit_provider_from_list)
+        layout.addWidget(self._provider_table)
 
-        scroll_area.setWidget(self._providers_widget)
-        layout.addWidget(scroll_area)
+        provider_actions = QHBoxLayout()
+        self._set_default_btn = QPushButton("Set Default")
+        self._set_default_btn.clicked.connect(self._set_default_from_list)
+        provider_actions.addWidget(self._set_default_btn)
 
-        # Prompt rules editor
-        prompt_group = QGroupBox("AI Prompt Kuralları")
-        prompt_layout = QVBoxLayout(prompt_group)
-        prompt_layout.setSpacing(8)
+        self._focus_provider_btn = QPushButton("Edit")
+        self._focus_provider_btn.clicked.connect(self._edit_provider_from_selection)
+        provider_actions.addWidget(self._focus_provider_btn)
+
+        provider_actions.addStretch()
+        layout.addLayout(provider_actions)
+
+        return widget
+
+    def _create_ai_prompt_rules_tab(self) -> QWidget:
+        """Create the AI prompt rules tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setSpacing(12)
 
         prompt_actions = QHBoxLayout()
         prompt_actions.addStretch()
         reset_prompt_btn = QPushButton("Reset Prompt Rules")
         reset_prompt_btn.clicked.connect(self._reset_prompt_rules_ui)
         prompt_actions.addWidget(reset_prompt_btn)
-        prompt_layout.addLayout(prompt_actions)
+        layout.addLayout(prompt_actions)
 
         prompt_help = QLabel(
-            "Not: {base_system} ve {base_user} yer tutucuları ile varsayılan promptu dahil edebilirsiniz."
+            "Note: You can include the default prompt using the {base_system} and {base_user} placeholders."
         )
         prompt_help.setStyleSheet("color: #64748b; font-size: 11px;")
-        prompt_layout.addWidget(prompt_help)
+        layout.addWidget(prompt_help)
 
         self._prompt_tabs = QTabWidget()
         self._prompt_tabs.setMinimumHeight(320)
@@ -1099,7 +1560,7 @@ class SettingsView(BaseView):
         global_layout = QVBoxLayout(global_tab)
         global_layout.setContentsMargins(8, 8, 8, 8)
         self._ai_global_instructions = QTextEdit()
-        self._ai_global_instructions.setPlaceholderText("Tüm AI analizleri için ortak talimatlar...")
+        self._ai_global_instructions.setPlaceholderText("Shared instructions for all AI analyses...")
         self._ai_global_instructions.setMinimumHeight(120)
         global_layout.addWidget(self._ai_global_instructions)
         self._prompt_tabs.addTab(global_tab, "Global")
@@ -1156,9 +1617,7 @@ class SettingsView(BaseView):
         index_layout.addRow("User Prompt:", self._ai_index_user_edit)
         self._prompt_tabs.addTab(index_tab, "Index Recommendation")
 
-        prompt_layout.addWidget(self._prompt_tabs)
-        layout.addWidget(prompt_group)
-
+        layout.addWidget(self._prompt_tabs)
         return widget
 
     def _reset_prompt_rules_ui(self) -> None:
@@ -1277,6 +1736,7 @@ class SettingsView(BaseView):
                 get_credential_store().set_password(profile.id, password)
             
             self._refresh_conn_table()
+            self.connections_changed.emit()
             logger.info(f"Connection added: {profile.name}")
 
     def _edit_connection(self, profile_id: str):
@@ -1297,6 +1757,7 @@ class SettingsView(BaseView):
                 get_credential_store().set_password(profile_id, password)
             
             self._refresh_conn_table()
+            self.connections_changed.emit()
             logger.info(f"Connection updated: {updated_profile.name}")
 
     def _delete_connection(self, profile_id: str):
@@ -1318,6 +1779,7 @@ class SettingsView(BaseView):
             store.delete(profile_id)
             get_credential_store().delete_password(profile_id)
             self._refresh_conn_table()
+            self.connections_changed.emit()
             logger.info(f"Connection deleted: {profile_id}")
 
     def _refresh_conn_table(self):
@@ -1335,7 +1797,7 @@ class SettingsView(BaseView):
             name_text = f"● {profile.name}" if is_active else profile.name
             name_item = QTableWidgetItem(name_text)
             if is_active:
-                name_item.setFont(QFont("", -1, QFont.Weight.Bold))
+                name_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
                 name_item.setForeground(Qt.GlobalColor.green)
             self._conn_table.setItem(i, 0, name_item)
             
@@ -1453,99 +1915,44 @@ class SettingsView(BaseView):
 
     def _add_provider(self):
         """Add a new LLM provider"""
-        provider_type = self._add_provider_combo.currentData()
+        dialog = AddAIModelDialog(parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        config = dialog.get_config()
         provider_id = f"provider_{self._provider_counter}"
         self._provider_counter += 1
+        config["id"] = provider_id
+        config["name"] = config.get("name") or f"{config.get('type', 'provider').title()} Provider {self._provider_counter - 1}"
+        self._llm_providers[provider_id] = config
 
-        # Create default config
-        config = {
-            "id": provider_id,
-            "type": provider_type,
-            "name": f"{provider_type.title()} Provider {self._provider_counter - 1}",
-        }
-
-        # Add provider-specific defaults
-        if provider_type == LLMProvider.OLLAMA.value:
-            config.update({"host": "http://localhost:11434", "model": "codellama"})
-        elif provider_type == LLMProvider.OPENAI.value:
-            config.update({"api_key": "", "model": "gpt-4o"})
-        elif provider_type == LLMProvider.ANTHROPIC.value:
-            config.update({"api_key": "", "model": "claude-3-5-sonnet-20241022"})
-        elif provider_type == LLMProvider.AZURE_OPENAI.value:
-            config.update({"api_key": "", "endpoint": "", "deployment": ""})
-        elif provider_type == LLMProvider.DEEPSEEK.value:
-            config.update({"api_key": "", "model": "deepseek-chat"})
-
-        # Create provider widget
-        is_first = len(self._llm_providers) == 0
-        provider_widget = LLMProviderWidget(provider_id, config, is_default=is_first, parent=self)
-        provider_widget.test_requested.connect(self._test_provider)
-        provider_widget.remove_requested.connect(self._remove_provider)
-        provider_widget.set_default_requested.connect(self._set_default_provider)
-
-        # Add to layout (before the stretch)
-        self._providers_layout.insertWidget(self._providers_layout.count() - 1, provider_widget)
-
-        self._llm_providers[provider_id] = provider_widget
-        
-        if is_first:
+        if len(self._llm_providers) == 1:
             self._active_provider_id = provider_id
 
-        # Force UI update
-        self._providers_widget.adjustSize()
+        self._refresh_provider_list()
 
-        logger.info(f"Added {provider_type} provider: {provider_id}")
+        logger.info(f"Added provider: {provider_id}")
 
     def _set_default_provider(self, provider_id: str):
         """Set a provider as default"""
         self._active_provider_id = provider_id
-        for pid, widget in self._llm_providers.items():
-            widget.set_is_default(pid == provider_id)
-        
+        self._refresh_provider_list()
         logger.info(f"Set default provider to: {provider_id}")
 
     def _remove_provider(self, provider_id: str):
         """Remove LLM provider"""
         if provider_id in self._llm_providers:
-            widget = self._llm_providers[provider_id]
-            self._providers_layout.removeWidget(widget)
-            widget.deleteLater()
             del self._llm_providers[provider_id]
 
+            if provider_id == self._active_provider_id:
+                next_default = next(iter(self._llm_providers.keys()), None)
+                if next_default:
+                    self._set_default_provider(next_default)
+                else:
+                    self._create_fallback_provider()
+
+            self._refresh_provider_list()
             logger.info(f"Removed provider: {provider_id}")
-
-    def _test_provider(self, provider_id: str):
-        """Test specific provider connection"""
-        if self._test_worker and self._test_worker.isRunning():
-            return
-
-        if provider_id not in self._llm_providers:
-            return
-
-        provider_widget = self._llm_providers[provider_id]
-        config = provider_widget.get_config()
-
-        # Start test worker
-        self._test_worker = LLMTestWorker(config)
-        self._test_worker.test_completed.connect(self._on_test_completed)
-        self._test_worker.start()
-
-        # Disable test button temporarily
-        provider_widget.test_btn.setEnabled(False)
-        provider_widget.test_btn.setText("Testing...")
-
-        logger.info(f"Testing provider {provider_id}: {config}")
-
-    @pyqtSlot(str, bool, str)
-    def _on_test_completed(self, provider_id: str, success: bool, message: str):
-        """Handle provider test completion"""
-        if provider_id in self._llm_providers:
-            provider_widget = self._llm_providers[provider_id]
-            provider_widget.test_btn.setEnabled(True)
-            provider_widget.test_btn.setText("Test")
-            provider_widget.show_test_result(success, message)
-
-        logger.info(f"Provider {provider_id} test completed: {success} - {message}")
 
     def _load_settings(self) -> None:
         """Load current settings into UI"""
@@ -1555,6 +1962,12 @@ class SettingsView(BaseView):
         idx = self._language_combo.findData(settings.ui.language.value)
         if idx >= 0:
             self._language_combo.setCurrentIndex(idx)
+        self._auto_connect_check.setChecked(getattr(settings, "enable_auto_connect", False))
+        self._check_updates_check.setChecked(getattr(settings, "enable_auto_update", True))
+        visibility_map = self._default_navigation_visibility()
+        visibility_map.update(getattr(settings.ui, "navigation_visibility", {}) or {})
+        for menu_id, check in self._menu_visibility_checks.items():
+            check.setChecked(bool(visibility_map.get(menu_id, True)))
 
         # Database
         self._query_timeout_spin.setValue(settings.database.query_timeout)
@@ -1594,25 +2007,17 @@ class SettingsView(BaseView):
         """Load saved LLM providers"""
         settings = get_settings()
         self._active_provider_id = settings.ai.active_provider_id
+        self._provider_counter = 1
 
-        # Clear existing widgets if any
-        for provider_id in list(self._llm_providers.keys()):
-            self._remove_provider(provider_id)
+        # Clear existing providers
+        self._llm_providers.clear()
 
         # Load from settings
         if settings.ai.providers:
             for provider_id, config in settings.ai.providers.items():
-                is_default = (provider_id == self._active_provider_id)
-                provider_widget = LLMProviderWidget(provider_id, config, is_default=is_default, parent=self)
-                provider_widget.test_requested.connect(self._test_provider)
-                provider_widget.remove_requested.connect(self._remove_provider)
-                provider_widget.set_default_requested.connect(self._set_default_provider)
-
-                self._providers_layout.insertWidget(
-                    self._providers_layout.count() - 1, provider_widget
-                )
-
-                self._llm_providers[provider_id] = provider_widget
+                provider_config = dict(config)
+                provider_config["id"] = provider_id
+                self._llm_providers[provider_id] = provider_config
                 
                 # Update counter to avoid ID conflicts
                 if provider_id.startswith("provider_"):
@@ -1621,6 +2026,8 @@ class SettingsView(BaseView):
                         self._provider_counter = max(self._provider_counter, num + 1)
                     except (ValueError, IndexError):
                         pass
+            if self._active_provider_id not in self._llm_providers and self._llm_providers:
+                self._active_provider_id = next(iter(self._llm_providers.keys()))
         else:
             # Default Ollama provider if none exist
             default_config = {
@@ -1632,30 +2039,143 @@ class SettingsView(BaseView):
             }
 
             self._active_provider_id = "default_ollama"
-            provider_widget = LLMProviderWidget("default_ollama", default_config, is_default=True, parent=self)
-            provider_widget.test_requested.connect(self._test_provider)
-            provider_widget.remove_requested.connect(self._remove_provider)
-            provider_widget.set_default_requested.connect(self._set_default_provider)
+            self._llm_providers["default_ollama"] = default_config
 
-            self._providers_layout.insertWidget(self._providers_layout.count() - 1, provider_widget)
+        self._refresh_provider_list()
 
-            self._llm_providers["default_ollama"] = provider_widget
+    def _refresh_provider_list(self) -> None:
+        """Refresh the providers summary list."""
+        if not hasattr(self, "_provider_table") or self._provider_table is None:
+            return
+
+        self._provider_table.setRowCount(len(self._llm_providers))
+        for row, (provider_id, config) in enumerate(self._llm_providers.items()):
+            is_default = provider_id == self._active_provider_id
+
+            default_item = QTableWidgetItem("⭐" if is_default else "")
+            default_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._provider_table.setItem(row, 0, default_item)
+
+            name = config.get("name", provider_id)
+            name_item = QTableWidgetItem(name)
+            name_item.setData(Qt.ItemDataRole.UserRole, provider_id)
+            self._provider_table.setItem(row, 1, name_item)
+
+            provider_type = config.get("type", "ollama").replace("_", " ").title()
+            type_item = QTableWidgetItem(provider_type)
+            self._provider_table.setItem(row, 2, type_item)
+
+            model_item = QTableWidgetItem(config.get("model", ""))
+            self._provider_table.setItem(row, 3, model_item)
+
+        self._provider_table.resizeColumnsToContents()
+
+    def _get_selected_provider_id(self) -> Optional[str]:
+        """Return provider id from the selected list row."""
+        if not hasattr(self, "_provider_table") or self._provider_table is None:
+            return None
+        row = self._provider_table.currentRow()
+        if row < 0:
+            return None
+        name_item = self._provider_table.item(row, 1)
+        if not name_item:
+            return None
+        return name_item.data(Qt.ItemDataRole.UserRole)
+
+    def _get_provider_id_from_row(self, row: int) -> Optional[str]:
+        """Return provider id from a table row."""
+        if not hasattr(self, "_provider_table") or self._provider_table is None:
+            return None
+        if row < 0 or row >= self._provider_table.rowCount():
+            return None
+        name_item = self._provider_table.item(row, 1)
+        if not name_item:
+            return None
+        return name_item.data(Qt.ItemDataRole.UserRole)
+
+    def _set_default_from_list(self) -> None:
+        """Set default provider from list selection."""
+        provider_id = self._get_selected_provider_id()
+        if provider_id:
+            self._set_default_provider(provider_id)
+
+    def _edit_provider_from_selection(self) -> None:
+        """Open edit dialog for the selected provider."""
+        provider_id = self._get_selected_provider_id()
+        if provider_id:
+            self._edit_provider_by_id(provider_id)
+
+    def _edit_provider_from_list(self, row: int, column: int) -> None:
+        """Open edit dialog on double-click."""
+        provider_id = self._get_provider_id_from_row(row)
+        if not provider_id:
+            return
+
+        self._provider_table.selectRow(row)
+        self._edit_provider_by_id(provider_id)
+
+    def _edit_provider_by_id(self, provider_id: str) -> None:
+        config = self._llm_providers.get(provider_id)
+        if not config:
+            return
+
+        dialog = AddAIModelDialog(parent=self, config=dict(config), provider_id=provider_id)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        if dialog.is_remove_requested():
+            self._remove_provider(provider_id)
+            return
+
+        updated_config = dialog.get_config()
+        updated_config["id"] = provider_id
+        updated_config["name"] = updated_config.get("name") or config.get("name") or f"{updated_config.get('type', 'provider').title()} Provider"
+        self._llm_providers[provider_id] = updated_config
+        self._refresh_provider_list()
+
+    def _create_fallback_provider(self) -> None:
+        """Create a default Ollama provider when none exist."""
+        default_config = {
+            "id": "default_ollama",
+            "type": LLMProvider.OLLAMA.value,
+            "name": "Default Ollama",
+            "host": "http://localhost:11434",
+            "model": "codellama",
+        }
+        self._active_provider_id = "default_ollama"
+        self._llm_providers["default_ollama"] = default_config
 
     def _save_settings(self) -> None:
         """Save settings"""
         try:
             # Collect LLM provider configurations
             llm_providers = {}
-            for provider_id, widget in self._llm_providers.items():
-                llm_providers[provider_id] = widget.get_config()
+            for provider_id, config in self._llm_providers.items():
+                llm_providers[provider_id] = dict(config)
+
+            navigation_visibility = {
+                menu_id: check.isChecked()
+                for menu_id, check in self._menu_visibility_checks.items()
+            }
+            if not any(navigation_visibility.values()):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Menu Selection",
+                    "At least one menu item must remain enabled.",
+                )
+                return
 
             update_settings(
+                enable_auto_connect=self._auto_connect_check.isChecked(),
+                enable_auto_update=self._check_updates_check.isChecked(),
                 ui={
                     "theme": Theme(self._theme_combo.currentData()),
-                    "language": Language(self._language_combo.currentData()),
+                    # English-only for now; other UI languages will be added later.
+                    "language": Language(self._language_combo.currentData() or Language.ENGLISH.value),
                     "font_size": self._font_size_spin.value(),
                     "code_font_size": self._code_font_size_spin.value(),
                     "show_line_numbers": self._line_numbers_check.isChecked(),
+                    "navigation_visibility": navigation_visibility,
                 },
                 database={
                     "query_timeout": self._query_timeout_spin.value(),
