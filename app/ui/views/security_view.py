@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from app.ui.views.base_view import BaseView
-from app.ui.theme import Colors, CircleStatCard
+from app.ui.theme import Colors
 from app.core.logger import get_logger
 from app.core.config import get_settings
 from app.database.connection import get_connection_manager
@@ -27,6 +27,65 @@ from app.services.security_service import (
 from app.database.queries.security_queries import SecurityRisk, get_risk_color
 
 logger = get_logger('views.security')
+
+
+class SummaryStatCard(QFrame):
+    """Square stat card for footer summary (Blocking Analysis style)."""
+
+    SCALE = 0.62
+    BASE_TILE_SIZE = 98
+    BASE_VALUE_FONT_SIZE = 18
+    BASE_TITLE_FONT_SIZE = 10
+
+    def __init__(self, title: str, value: str, accent: str, parent=None):
+        super().__init__(parent)
+        self._accent = str(accent or Colors.PRIMARY)
+        self._setup_ui(title, value)
+
+    def _setup_ui(self, title: str, value: str) -> None:
+        self.setStyleSheet("background-color: transparent; border: none;")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        tile_size = max(28, int(self.BASE_TILE_SIZE * self.SCALE))
+        tile_radius = max(6, min(12, int(tile_size * 0.2)))
+        tile = QFrame()
+        tile.setFixedSize(tile_size, tile_size)
+        tile.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.BORDER};
+                border-radius: {tile_radius}px;
+            }}
+        """)
+        tile_layout = QVBoxLayout(tile)
+        tile_layout.setContentsMargins(0, 0, 0, 0)
+        tile_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        value_font_size = max(11, int(self.BASE_VALUE_FONT_SIZE * self.SCALE))
+        self._value_label = QLabel(str(value))
+        self._value_label.setStyleSheet(
+            f"color: {self._accent}; font-size: {value_font_size}px; font-weight: 700; background: transparent; border: none;"
+        )
+        self._value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tile_layout.addWidget(self._value_label)
+
+        title_font_size = max(9, int(self.BASE_TITLE_FONT_SIZE * self.SCALE))
+        self._title_label = QLabel(str(title))
+        self._title_label.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: {title_font_size}px; font-weight: 700; background: transparent;"
+        )
+        self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._title_label.setWordWrap(True)
+
+        layout.addWidget(tile)
+        layout.addWidget(self._title_label)
+
+    def update_value(self, value: str) -> None:
+        self._value_label.setText(str(value))
 
 
 class SecurityAuditWorker(QThread):
@@ -109,14 +168,14 @@ class IssueCard(QFrame):
             if len(self._issue.details) > 5:
                 details_text += f" ... (+{len(self._issue.details) - 5} more)"
             
-            details = QLabel(f"📋 {details_text}")
+            details = QLabel(str(details_text))
             details.setStyleSheet(f"color: {self._issue.risk_color}; font-size: 11px; border: none;")
             details.setWordWrap(True)
             layout.addWidget(details)
         
         # Recommendation
         if self._issue.recommendation:
-            rec = QLabel(f"💡 {self._issue.recommendation}")
+            rec = QLabel(str(self._issue.recommendation))
             rec.setStyleSheet(f"color: #059669; font-size: 11px; border: none;")
             rec.setWordWrap(True)
             layout.addWidget(rec)
@@ -134,16 +193,12 @@ class LoginRow(QFrame):
         # Determine status color
         if self._login.is_disabled:
             status_color = Colors.TEXT_SECONDARY
-            status_icon = "⏸️"
         elif self._login.is_locked:
             status_color = "#EF4444"
-            status_icon = "🔒"
         elif self._login.is_expired:
             status_color = "#F59E0B"
-            status_icon = "⚠️"
         else:
             status_color = "#10B981"
-            status_icon = "✅"
         
         self.setStyleSheet(f"""
             QFrame {{
@@ -159,11 +214,6 @@ class LoginRow(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(12)
-        
-        # Status icon
-        icon = QLabel(status_icon)
-        icon.setStyleSheet("font-size: 14px; border: none;")
-        layout.addWidget(icon)
         
         # Login info
         info_layout = QVBoxLayout()
@@ -216,20 +266,6 @@ class SecurityView(BaseView):
         title_layout = QHBoxLayout(title_container)
         title_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Left side - title
-        title_left = QVBoxLayout()
-        title_left.setSpacing(8)
-        
-        title = QLabel("🛡️ Security Audit")
-        title.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; background: transparent;")
-        title.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
-        title_left.addWidget(title)
-        
-        subtitle = QLabel("SQL Server security analysis and recommendations")
-        subtitle.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 14px; background: transparent;")
-        title_left.addWidget(subtitle)
-        
-        title_layout.addLayout(title_left)
         title_layout.addStretch()
         
         # Run Audit button
@@ -251,7 +287,7 @@ class SecurityView(BaseView):
             }}
         """)
 
-        self._audit_btn = QPushButton("🔍 Run Audit")
+        self._audit_btn = QPushButton("Run Audit")
         self._audit_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {Colors.PRIMARY};
@@ -277,7 +313,7 @@ class SecurityView(BaseView):
         right_controls_layout.setContentsMargins(0, 0, 0, 0)
         right_controls_layout.setSpacing(10)
 
-        self._save_report_btn = QPushButton("💾 Save HTML")
+        self._save_report_btn = QPushButton("Save HTML")
         self._save_report_btn.setEnabled(False)
         self._save_report_btn.setStyleSheet(f"""
             QPushButton {{
@@ -305,32 +341,7 @@ class SecurityView(BaseView):
         
         self._main_layout.addWidget(title_container)
         self._main_layout.addSpacing(12)
-        
-        # ═══════════════════════════════════════════════════════════════════
-        # SUMMARY CARDS
-        # ═══════════════════════════════════════════════════════════════════
-        summary_layout = QHBoxLayout()
-        summary_layout.setSpacing(16)
-        summary_layout.setContentsMargins(0, 0, 0, 0)
-        
-        summary_items = [
-            ("critical", "Critical", "0", "🔴", get_risk_color(SecurityRisk.CRITICAL)),
-            ("high", "High", "0", "🟠", get_risk_color(SecurityRisk.HIGH)),
-            ("medium", "Medium", "0", "🟡", get_risk_color(SecurityRisk.MEDIUM)),
-            ("low", "Low", "0", "🔵", get_risk_color(SecurityRisk.LOW)),
-            ("logins", "Total Logins", "0", "👤", Colors.PRIMARY),
-            ("sysadmins", "Sysadmins", "0", "👑", "#8B5CF6"),
-        ]
-        
-        for card_id, label, value, icon, color in summary_items:
-            card = self._create_summary_card(icon, label, value, color)
-            self._summary_cards[card_id] = card
-            summary_layout.addWidget(card)
-        
-        summary_layout.addStretch()
-        self._main_layout.addLayout(summary_layout)
-        self._main_layout.addSpacing(12)
-        
+
         # ═══════════════════════════════════════════════════════════════════
         # MAIN CONTENT
         # ═══════════════════════════════════════════════════════════════════
@@ -346,7 +357,7 @@ class SecurityView(BaseView):
         left_layout.setSpacing(0)
         
         # Header
-        issues_header = QLabel("⚠️ Security Issues")
+        issues_header = QLabel("Security Issues")
         issues_header.setStyleSheet(f"""
             color: {Colors.TEXT_PRIMARY}; 
             font-size: 14px; 
@@ -388,7 +399,7 @@ class SecurityView(BaseView):
         right_layout.setSpacing(0)
         
         # Logins header
-        logins_header = QLabel("👤 Server Logins")
+        logins_header = QLabel("Server Logins")
         logins_header.setStyleSheet(f"""
             color: {Colors.TEXT_PRIMARY}; 
             font-size: 14px; 
@@ -415,24 +426,54 @@ class SecurityView(BaseView):
         
         splitter.addWidget(right_panel)
         splitter.setSizes([550, 350])
-        
+
         self._main_layout.addWidget(splitter, stretch=1)
-    
-    def _create_summary_card(self, icon: str, label: str, value: str, color: str) -> CircleStatCard:
-        """Create a circle summary stat card - GUI-05 style"""
-        title = f"{icon} {label}"
-        return CircleStatCard(title, value, color)
-    
+
+        # ═══════════════════════════════════════════════════════════════════
+        # FOOTER SUMMARY (bottom-right) - Blocking Analysis style
+        # ═══════════════════════════════════════════════════════════════════
+        summary_items = [
+            ("critical", "Critical", "0", "", get_risk_color(SecurityRisk.CRITICAL)),
+            ("high", "High", "0", "", get_risk_color(SecurityRisk.HIGH)),
+            ("medium", "Medium", "0", "", get_risk_color(SecurityRisk.MEDIUM)),
+            ("low", "Low", "0", "", get_risk_color(SecurityRisk.LOW)),
+            ("logins", "Total Logins", "0", "", Colors.PRIMARY),
+            ("sysadmins", "Sysadmins", "0", "", "#8B5CF6"),
+        ]
+
+        footer_layout = QHBoxLayout()
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(12)
+        footer_layout.addStretch(1)
+
+        summary_container = QWidget()
+        summary_layout = QHBoxLayout(summary_container)
+        summary_layout.setContentsMargins(0, 0, 0, 0)
+        summary_layout.setSpacing(12)
+
+        for card_id, label, value, icon, color in summary_items:
+            card = self._create_summary_card(icon, label, value, color)
+            self._summary_cards[card_id] = card
+            summary_layout.addWidget(card)
+
+        footer_layout.addWidget(
+            summary_container,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        self._main_layout.addLayout(footer_layout)
+
+    def _create_summary_card(self, icon: str, label: str, value: str, color: str) -> SummaryStatCard:
+        icon = str(icon or "").strip()
+        title = f"{icon} {label}".strip() if icon else str(label)
+        return SummaryStatCard(title, value, str(color))
+
     def _update_summary_card(self, card_id: str, value: str):
         """Update a summary card value"""
         if card_id in self._summary_cards:
             card = self._summary_cards[card_id]
-            if isinstance(card, CircleStatCard):
+            if hasattr(card, "update_value"):
                 card.update_value(value)
-            else:
-                value_lbl = card.findChild(QLabel, "value")
-                if value_lbl:
-                    value_lbl.setText(value)
     
     def on_show(self) -> None:
         """Called when view becomes visible"""
@@ -462,7 +503,7 @@ class SecurityView(BaseView):
     def _set_audit_running(self, running: bool) -> None:
         if self._audit_btn:
             self._audit_btn.setEnabled(not running)
-            self._audit_btn.setText("🔍 Running..." if running else "🔍 Run Audit")
+            self._audit_btn.setText("Running..." if running else "Run Audit")
         if self._audit_progress:
             self._audit_progress.setVisible(running)
         if self._save_report_btn:
@@ -1128,7 +1169,7 @@ class SecurityView(BaseView):
                 item.widget().deleteLater()
         
         if not issues:
-            success = QLabel("✅ No security issues found!")
+            success = QLabel("No security issues found!")
             success.setStyleSheet(f"color: #10B981; font-size: 14px; padding: 32px; font-weight: bold;")
             success.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._issues_layout.insertWidget(0, success)

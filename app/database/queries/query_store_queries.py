@@ -70,10 +70,22 @@ class QueryStoreQueries:
         qso.desired_state_desc,
         qso.actual_state_desc,
         qso.current_storage_size_mb,
-        qso.max_storage_size_mb
+        qso.max_storage_size_mb,
+        qso.query_capture_mode_desc,
+        qso.stale_query_threshold_days,
+        qso.size_based_cleanup_mode_desc
     FROM sys.databases d
     CROSS JOIN sys.database_query_store_options qso
     WHERE d.name = DB_NAME()
+    """
+
+    QUERY_STORE_DATA_QUALITY = """
+    SELECT
+        COUNT(DISTINCT q.query_id) AS query_count,
+        MAX(rs.last_execution_time) AS most_recent_execution
+    FROM sys.query_store_query q
+    LEFT JOIN sys.query_store_plan p ON q.query_id = p.query_id
+    LEFT JOIN sys.query_store_runtime_stats rs ON p.plan_id = rs.plan_id
     """
     
     # ==========================================================================
@@ -107,8 +119,40 @@ class QueryStoreQueries:
             ON rs.runtime_stats_interval_id = rsi.runtime_stats_interval_id
         WHERE rsi.start_time > DATEADD(day, -:days, GETDATE())
         GROUP BY q.query_id, q.query_hash, CAST(qt.query_sql_text AS NVARCHAR(MAX)), q.object_id
+    ),
+    Ranked AS (
+        SELECT
+            query_id,
+            query_hash,
+            query_text,
+            object_name,
+            schema_name,
+            plan_count,
+            total_executions,
+            avg_duration_ms,
+            avg_cpu_ms,
+            avg_logical_reads,
+            avg_logical_writes,
+            avg_physical_reads,
+            last_execution,
+            max_duration_ms,
+            (max_duration_ms * total_executions / 1000.0) AS impact_score,
+            ROW_NUMBER() OVER (
+                ORDER BY
+                    CASE :sort_by
+                        WHEN 'impact_score' THEN (max_duration_ms * total_executions / 1000.0)
+                        WHEN 'avg_duration' THEN avg_duration_ms
+                        WHEN 'total_cpu' THEN avg_cpu_ms * total_executions
+                        WHEN 'execution_count' THEN total_executions
+                        WHEN 'logical_reads' THEN avg_logical_reads
+                        ELSE (max_duration_ms * total_executions / 1000.0)
+                    END DESC,
+                    query_id ASC
+            ) AS rn,
+            COUNT(1) OVER() AS total_count_raw
+        FROM QueryMetrics
     )
-    SELECT TOP (:top_n)
+    SELECT
         query_id,
         query_hash,
         query_text,
@@ -123,18 +167,16 @@ class QueryStoreQueries:
         avg_physical_reads,
         last_execution,
         max_duration_ms,
-        -- Impact Score = P95 Duration × Execution Count / 1000
-        (max_duration_ms * total_executions / 1000.0) AS impact_score
-    FROM QueryMetrics
-    ORDER BY 
-        CASE :sort_by
-            WHEN 'impact_score' THEN (max_duration_ms * total_executions / 1000.0)
-            WHEN 'avg_duration' THEN avg_duration_ms
-            WHEN 'total_cpu' THEN avg_cpu_ms * total_executions
-            WHEN 'execution_count' THEN total_executions
-            WHEN 'logical_reads' THEN avg_logical_reads
-            ELSE (max_duration_ms * total_executions / 1000.0)
-        END DESC
+        impact_score,
+        CASE
+            WHEN total_count_raw > :top_n THEN :top_n
+            ELSE total_count_raw
+        END AS total_count
+    FROM Ranked
+    WHERE rn > :offset
+      AND rn <= (:offset + :page_size)
+      AND rn <= :top_n
+    ORDER BY rn
     """
     
     # Sorgu bazlı Wait İstatistikleri (SQL Server 2017+)
@@ -242,36 +284,85 @@ class QueryStoreQueries:
         WHERE qs.last_execution_time > DATEADD(day, -:days, GETDATE())
           AND st.text NOT LIKE '%sys.%'
           AND st.dbid = DB_ID()
+    ),
+    Aggregated AS (
+        SELECT
+            MIN(query_hash) AS query_hash,
+            object_name AS query_text,
+            object_name,
+            schema_name,
+            DB_NAME() AS database_name,
+            SUM(execution_count) AS total_executions,
+            SUM(total_elapsed_time / 1000.0) / NULLIF(SUM(execution_count), 0) AS avg_duration_ms,
+            SUM(total_worker_time / 1000.0) / NULLIF(SUM(execution_count), 0) AS avg_cpu_ms,
+            SUM(total_logical_reads) / NULLIF(SUM(execution_count), 0) AS avg_logical_reads,
+            SUM(total_logical_writes) / NULLIF(SUM(execution_count), 0) AS avg_logical_writes,
+            SUM(total_physical_reads) / NULLIF(SUM(execution_count), 0) AS avg_physical_reads,
+            MAX(last_execution_time) AS last_execution,
+            MAX(max_elapsed_time / 1000.0) AS max_duration_ms,
+            COUNT(DISTINCT query_hash) AS plan_count,
+            (MAX(max_elapsed_time / 1000.0) * SUM(execution_count) / 1000.0) AS impact_score
+        FROM QueryStats
+        WHERE object_name IS NOT NULL
+        GROUP BY object_name, schema_name
+    ),
+    Ranked AS (
+        SELECT
+            query_hash,
+            query_text,
+            object_name,
+            schema_name,
+            database_name,
+            total_executions,
+            avg_duration_ms,
+            avg_cpu_ms,
+            avg_logical_reads,
+            avg_logical_writes,
+            avg_physical_reads,
+            last_execution,
+            max_duration_ms,
+            plan_count,
+            impact_score,
+            ROW_NUMBER() OVER (
+                ORDER BY
+                    CASE :sort_by
+                        WHEN 'impact_score' THEN impact_score
+                        WHEN 'avg_duration' THEN avg_duration_ms
+                        WHEN 'total_cpu' THEN avg_cpu_ms * total_executions
+                        WHEN 'execution_count' THEN total_executions
+                        WHEN 'logical_reads' THEN avg_logical_reads
+                        ELSE impact_score
+                    END DESC,
+                    object_name ASC
+            ) AS rn,
+            COUNT(1) OVER() AS total_count_raw
+        FROM Aggregated
     )
-    SELECT TOP (:top_n)
-        MIN(query_hash) AS query_hash,
-        object_name AS query_text,
+    SELECT
+        query_hash,
+        query_text,
         object_name,
         schema_name,
-        DB_NAME() AS database_name,
-        SUM(execution_count) AS total_executions,
-        SUM(total_elapsed_time / 1000.0) / NULLIF(SUM(execution_count), 0) AS avg_duration_ms,
-        SUM(total_worker_time / 1000.0) / NULLIF(SUM(execution_count), 0) AS avg_cpu_ms,
-        SUM(total_logical_reads) / NULLIF(SUM(execution_count), 0) AS avg_logical_reads,
-        SUM(total_logical_writes) / NULLIF(SUM(execution_count), 0) AS avg_logical_writes,
-        SUM(total_physical_reads) / NULLIF(SUM(execution_count), 0) AS avg_physical_reads,
-        MAX(last_execution_time) AS last_execution,
-        MAX(max_elapsed_time / 1000.0) AS max_duration_ms,
-        COUNT(DISTINCT query_hash) AS plan_count,
-        -- Impact Score: Max Duration × Total Executions / 1000
-        (MAX(max_elapsed_time / 1000.0) * SUM(execution_count) / 1000.0) AS impact_score
-    FROM QueryStats
-    WHERE object_name IS NOT NULL
-    GROUP BY object_name, schema_name
-    ORDER BY 
-        CASE :sort_by
-            WHEN 'impact_score' THEN (MAX(max_elapsed_time / 1000.0) * SUM(execution_count) / 1000.0)
-            WHEN 'avg_duration' THEN SUM(total_elapsed_time / 1000.0) / NULLIF(SUM(execution_count), 0)
-            WHEN 'total_cpu' THEN SUM(total_worker_time)
-            WHEN 'execution_count' THEN SUM(execution_count)
-            WHEN 'logical_reads' THEN SUM(total_logical_reads)
-            ELSE (MAX(max_elapsed_time / 1000.0) * SUM(execution_count) / 1000.0)
-        END DESC
+        database_name,
+        total_executions,
+        avg_duration_ms,
+        avg_cpu_ms,
+        avg_logical_reads,
+        avg_logical_writes,
+        avg_physical_reads,
+        last_execution,
+        max_duration_ms,
+        plan_count,
+        impact_score,
+        CASE
+            WHEN total_count_raw > :top_n THEN :top_n
+            ELSE total_count_raw
+        END AS total_count
+    FROM Ranked
+    WHERE rn > :offset
+      AND rn <= (:offset + :page_size)
+      AND rn <= :top_n
+    ORDER BY rn
     """
     
     # DMV tabanlı wait stats (sunucu geneli)

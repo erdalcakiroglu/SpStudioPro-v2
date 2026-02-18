@@ -192,6 +192,8 @@ class AIAnalysisService:
                         response += "\n⚠️ **Warning:** Some potentially dangerous commands were filtered."
                 else:
                     response += f"\n\n---\n📊 **Recommendation Quality Score:** {validation.quality_score:.0f}/100"
+
+                response = self._append_version_compat_notes(response, validation)
             
             self._log_analysis_result(
                 query_id=query_stats.query_id,
@@ -215,8 +217,34 @@ class AIAnalysisService:
         try:
             query_text = context.get('query_text', '')
             metrics = context.get('metrics', {})
-            wait_profile = context.get('wait_profile') or {}
+            wait_profile_raw = context.get('wait_profile') or context.get('wait_stats_correlation') or {}
+            if isinstance(wait_profile_raw, list):
+                wait_profile = {}
+                for item in wait_profile_raw:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("display_name", "") or item.get("category", "")).strip()
+                    if not name:
+                        continue
+                    wait_profile[name] = float(item.get("wait_percent", 0.0) or 0.0)
+            elif isinstance(wait_profile_raw, dict):
+                wait_profile = wait_profile_raw
+            else:
+                wait_profile = {}
             server_metrics = context.get('server_metrics') or {}
+            plan_insights = context.get("plan_insights") or None
+            quality_info = context.get("analysis_context_quality") or {}
+            quality_score = int(quality_info.get("score", 0) or 0)
+            quality_confidence = str(quality_info.get("confidence", "Low") or "Low")
+            self_critique_enabled = bool(
+                context.get("self_critique_enabled", quality_info.get("self_critique_enabled", False))
+            )
+
+            if not self_critique_enabled:
+                logger.info(
+                    "Context quality below threshold - self-critique disabled "
+                    f"(score={quality_score}, confidence={quality_confidence})"
+                )
             stability_info = {
                 "plan_count": metrics.get('plan_count', 'N/A'),
                 "plan_changes_7d": metrics.get('plan_count', 'N/A'),
@@ -247,6 +275,12 @@ class AIAnalysisService:
                     "stats_table": stats_table,
                     "server_stats_table": server_table,
                     "query_id": context.get('query_id'),
+                    "analysis_context_quality": {
+                        "score": quality_score,
+                        "confidence": quality_confidence,
+                        "self_critique_enabled": self_critique_enabled,
+                    },
+                    "analysis_context_warnings": context.get("analysis_context_warnings", []),
                 }
             )
 
@@ -255,7 +289,7 @@ class AIAnalysisService:
                 metrics=metrics,
                 wait_profile=wait_profile,
                 stability_info=stability_info,
-                plan_insights=None,
+                plan_insights=plan_insights,
                 context=prompt_context
             )
 
@@ -313,6 +347,8 @@ class AIAnalysisService:
                 else:
                     response += f"\n\n---\n📊 **Recommendation Quality Score:** {validation.quality_score:.0f}/100"
 
+                response = self._append_version_compat_notes(response, validation)
+
             self._log_analysis_result(
                 query_id=context.get('query_id'),
                 query_name=context.get('query_name', 'Query'),
@@ -346,20 +382,21 @@ class AIAnalysisService:
         object_name: str,
         object_type: str = "",
         database_name: str = "",
-        object_resolution: Dict[str, Any] = None,
-        stats: Dict[str, Any] = None,
-        missing_indexes: list = None,
-        dependencies: list = None,
-        query_store: Dict[str, Any] = None,
+        object_resolution: Optional[Dict[str, Any]] = None,
+        stats: Optional[Dict[str, Any]] = None,
+        missing_indexes: Optional[list] = None,
+        dependencies: Optional[list] = None,
+        query_store: Optional[Dict[str, Any]] = None,
         plan_xml: str = None,
-        plan_meta: Dict[str, Any] = None,
-        plan_insights: Dict[str, Any] = None,
-        existing_indexes: list = None,
-        parameter_sniffing: Dict[str, Any] = None,
-        historical_trend: Dict[str, Any] = None,
-        memory_grants: Dict[str, Any] = None,
-        completeness: Dict[str, Any] = None,
-        context_warning: str = None,
+        plan_meta: Optional[Dict[str, Any]] = None,
+        plan_insights: Optional[Dict[str, Any]] = None,
+        existing_indexes: Optional[list] = None,
+        view_metadata: Optional[Dict[str, Any]] = None,
+        parameter_sniffing: Optional[Dict[str, Any]] = None,
+        historical_trend: Optional[Dict[str, Any]] = None,
+        memory_grants: Optional[Dict[str, Any]] = None,
+        completeness: Optional[Dict[str, Any]] = None,
+        context_warning: Optional[str] = None,
         deep_analysis: bool = False,                     # NEW: Deep analysis mode
         skip_cache: bool = False,                         # NEW: Skip cache
         streaming: bool = False,
@@ -385,6 +422,7 @@ class AIAnalysisService:
             plan_meta: Plan metadata
             plan_insights: ExecutionPlanAnalyzer sonuçları
             existing_indexes: Mevcut index bilgileri
+            view_metadata: View-specific metadata and monitoring baseline
             parameter_sniffing: Parameter sniffing analizi
             historical_trend: Performans trendi
             memory_grants: Memory grant bilgileri
@@ -429,7 +467,7 @@ class AIAnalysisService:
             context = self._build_context_dict(
                 source_code, object_name, stats, missing_indexes, dependencies,
                 query_store, plan_xml, plan_meta, plan_insights, existing_indexes,
-                parameter_sniffing, historical_trend, memory_grants, completeness,
+                view_metadata, parameter_sniffing, historical_trend, memory_grants, completeness,
                 object_resolution, plan_signal_summary, environment_policy, normalized_object_type,
             )
             index_gate: Dict[str, Any] = {
@@ -482,6 +520,24 @@ class AIAnalysisService:
             missing_indexes_for_prompt_anon = self._anonymize_missing_indexes(missing_indexes_for_prompt)
             existing_indexes_for_prompt_anon = self._anonymize_existing_indexes(existing_indexes)
 
+            prompt_values = self._build_sp_prompt_placeholders(
+                source_code=source_code,
+                object_name=object_name,
+                database_name=database_name,
+                stats=stats or {},
+                missing_indexes=missing_indexes_for_prompt_anon,
+                dependencies=dependencies or [],
+                query_store=query_store or {},
+                plan_insights=plan_insights or {},
+                existing_indexes=existing_indexes_for_prompt_anon,
+                parameter_sniffing=parameter_sniffing or {},
+                memory_grants=memory_grants or {},
+                completeness=completeness or {},
+                index_gate=index_gate or {},
+                environment_policy=environment_policy or {},
+                analysis_mode="deep" if deep_analysis else "standard",
+            )
+
             # Build prompt
             system_prompt, user_prompt = AdvancedPromptBuilder.build_sp_optimization_prompt(
                 source_code=source_code,
@@ -499,7 +555,10 @@ class AIAnalysisService:
                 memory_grants=memory_grants,
                 completeness=completeness,
                 context_warning=effective_context_warning,
-                context=PromptContext(sql_version=self._get_sql_version_string())
+                context=PromptContext(
+                    sql_version=self._get_sql_version_string(),
+                    additional_context=prompt_values,
+                )
             )
             
             # Add deep analysis enhancement if requested
@@ -514,15 +573,6 @@ class AIAnalysisService:
             analyzer_profile = analyzer.build_profile(
                 index_gate=index_gate,
                 environment_policy=environment_policy,
-            )
-            for block in analyzer_profile.prompt_blocks:
-                block_text = str(block or "").strip()
-                if block_text:
-                    user_prompt += f"\n\n{block_text}"
-            user_prompt += (
-                "\n\n### RESPONSE LANGUAGE\n"
-                "- Output must be English only.\n"
-                "- Do not include Turkish text in headers, explanations, or recommendations.\n"
             )
 
             llm_json_prompt = self._build_json_user_prompt(
@@ -546,6 +596,7 @@ class AIAnalysisService:
                     plan_meta=plan_meta,
                     plan_insights=plan_insights,
                     existing_indexes=existing_indexes_for_prompt_anon,
+                    view_metadata=view_metadata,
                     parameter_sniffing=parameter_sniffing,
                     historical_trend=historical_trend,
                     memory_grants=memory_grants,
@@ -571,6 +622,7 @@ class AIAnalysisService:
             auto_exec_summary = self._build_auto_executive_summary_markdown(
                 object_name=object_name,
                 stats=stats or {},
+                query_store=prompt_input.get("query_store", {}),
                 historical_trend=historical_trend or {},
                 index_pre_analysis=prompt_input.get("index_pre_analysis", {}),
                 plan_signal_summary=plan_signal_summary or {},
@@ -595,6 +647,13 @@ class AIAnalysisService:
                     self._last_request_file_path = None
 
                     # Re-run self-reflection on cached result
+                    if requires_index_policy and not index_gate.get("allowed", False):
+                        cached = self._enforce_no_index_recommendations(
+                            cached,
+                            index_gate,
+                            plan_signal_summary=plan_signal_summary or {},
+                        )
+                    cached = self._enforce_plan_operator_terminology(cached, plan_insights or {})
                     cached = self._ensure_auto_executive_summary(cached, auto_exec_summary)
                     confidence = self._run_self_reflection(cached, context)
                     return cached, confidence
@@ -632,7 +691,12 @@ class AIAnalysisService:
             validation = self.response_validator.validate(response)
             response = validation.sanitized_response
             if requires_index_policy and not index_gate.get("allowed", False):
-                response = self._enforce_no_index_recommendations(response, index_gate)
+                response = self._enforce_no_index_recommendations(
+                    response,
+                    index_gate,
+                    plan_signal_summary=plan_signal_summary or {},
+                )
+            response = self._enforce_plan_operator_terminology(response, plan_insights or {})
             response = self._ensure_auto_executive_summary(response, auto_exec_summary)
              
             # Run self-reflection
@@ -659,7 +723,12 @@ class AIAnalysisService:
                     refined_validation = self.response_validator.validate(refined_response)
                     refined_response = refined_validation.sanitized_response
                     if requires_index_policy and not index_gate.get("allowed", False):
-                        refined_response = self._enforce_no_index_recommendations(refined_response, index_gate)
+                        refined_response = self._enforce_no_index_recommendations(
+                            refined_response,
+                            index_gate,
+                            plan_signal_summary=plan_signal_summary or {},
+                        )
+                    refined_response = self._enforce_plan_operator_terminology(refined_response, plan_insights or {})
                     refined_response = self._ensure_auto_executive_summary(refined_response, auto_exec_summary)
                     refined_confidence = self._run_self_reflection(refined_response, context)
                     if self._is_refinement_improved(confidence, refined_confidence):
@@ -677,7 +746,16 @@ class AIAnalysisService:
              
             # Add confidence info to response
             response += f"\n\n---\n📊 **Recommendation Quality Score:** {validation.quality_score:.0f}/100"
-            response += f"\n{confidence.emoji} **Analysis Confidence:** {confidence.percentage}% ({confidence.level.value})"
+            response += (
+                f"\n{confidence.emoji} **Analysis Confidence (overall):** "
+                f"{confidence.percentage}% ({confidence.level.value})"
+            )
+            response += (
+                f"\n- **Confidence (Query evidence):** {int(confidence.query_evidence_score * 100)}%"
+                f"\n- **Confidence (Plan evidence):** {int(confidence.plan_evidence_score * 100)}%"
+                f"\n- **Confidence (Index evidence):** {int(confidence.index_evidence_score * 100)}%"
+            )
+            response = self._append_version_compat_notes(response, validation)
             if refinement_applied:
                 response += "\nℹ️ **Self-Reflection Refinement:** Applied a second-pass correction due to low confidence."
             
@@ -711,20 +789,21 @@ class AIAnalysisService:
         object_name: str,
         object_type: str = "",
         database_name: str = "",
-        object_resolution: Dict[str, Any] = None,
-        stats: Dict[str, Any] = None,
-        missing_indexes: list = None,
-        dependencies: list = None,
-        query_store: Dict[str, Any] = None,
+        object_resolution: Optional[Dict[str, Any]] = None,
+        stats: Optional[Dict[str, Any]] = None,
+        missing_indexes: Optional[list] = None,
+        dependencies: Optional[list] = None,
+        query_store: Optional[Dict[str, Any]] = None,
         plan_xml: str = None,
-        plan_meta: Dict[str, Any] = None,
-        plan_insights: Dict[str, Any] = None,
-        existing_indexes: list = None,
-        parameter_sniffing: Dict[str, Any] = None,
-        historical_trend: Dict[str, Any] = None,
-        memory_grants: Dict[str, Any] = None,
-        completeness: Dict[str, Any] = None,
-        context_warning: str = None,
+        plan_meta: Optional[Dict[str, Any]] = None,
+        plan_insights: Optional[Dict[str, Any]] = None,
+        existing_indexes: Optional[list] = None,
+        view_metadata: Optional[Dict[str, Any]] = None,
+        parameter_sniffing: Optional[Dict[str, Any]] = None,
+        historical_trend: Optional[Dict[str, Any]] = None,
+        memory_grants: Optional[Dict[str, Any]] = None,
+        completeness: Optional[Dict[str, Any]] = None,
+        context_warning: Optional[str] = None,
         deep_analysis: bool = False,
         skip_cache: bool = False,
         streaming: bool = False,
@@ -747,6 +826,7 @@ class AIAnalysisService:
             plan_meta=plan_meta,
             plan_insights=plan_insights,
             existing_indexes=existing_indexes,
+            view_metadata=view_metadata,
             parameter_sniffing=parameter_sniffing,
             historical_trend=historical_trend,
             memory_grants=memory_grants,
@@ -770,6 +850,7 @@ class AIAnalysisService:
         plan_meta: Dict[str, Any],
         plan_insights: Dict[str, Any],
         existing_indexes: list,
+        view_metadata: Dict[str, Any],
         parameter_sniffing: Dict[str, Any],
         historical_trend: Dict[str, Any],
         memory_grants: Dict[str, Any],
@@ -792,6 +873,7 @@ class AIAnalysisService:
             "plan_meta": plan_meta or {},
             "plan_insights": plan_insights or {},
             "existing_indexes": existing_indexes or [],
+            "view_metadata": view_metadata or {},
             "parameter_sniffing": parameter_sniffing or {},
             "historical_trend": historical_trend or {},
             "memory_grants": memory_grants or {},
@@ -812,6 +894,195 @@ class AIAnalysisService:
         return text[:max_len] + "\n... [truncated]"
 
     @staticmethod
+    def _normalize_sql_identifier(token: str) -> str:
+        text = str(token or "").strip()
+        if not text:
+            return ""
+        text = text.strip(",;")
+        text = text.replace("[", "").replace("]", "")
+        text = text.replace("`", "").replace('"', "")
+        return text.strip()
+
+    def _extract_source_objects(
+        self,
+        source_code: str,
+        object_name: str,
+        *,
+        max_tables: int = 30,
+        max_columns: int = 60,
+    ) -> Dict[str, List[str]]:
+        if not source_code:
+            return {"tables": [], "columns": []}
+
+        text = str(source_code)
+        text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+        text = re.sub(r"--.*?$", " ", text, flags=re.MULTILINE)
+        text = re.sub(r"'(?:''|[^'])*'", " ", text, flags=re.DOTALL)
+
+        tables: set = set()
+        table_refs = re.findall(
+            r"\b(?:from|join|into|update|merge\s+into|delete\s+from)\s+([a-zA-Z0-9\[\]_\.\#]+)",
+            text,
+            re.IGNORECASE,
+        )
+        for raw in table_refs:
+            candidate = self._normalize_sql_identifier(raw)
+            if not candidate:
+                continue
+            candidate = candidate.split()[0]
+            candidate = candidate.strip(",;")
+            if not candidate:
+                continue
+            tables.add(candidate)
+            if "." in candidate:
+                tables.add(candidate.split(".")[-1])
+
+        known_table_keys = {t.lower() for t in tables if t}
+        columns: set = set()
+        stopwords = {
+            "select", "from", "join", "where", "group", "order", "having", "with",
+            "on", "and", "or", "as", "by", "inner", "left", "right", "full",
+            "cross", "apply", "outer", "top", "distinct", "case", "when", "then",
+            "else", "end", "into", "update", "delete", "insert", "merge", "values", "set",
+        }
+
+        sp_name = (str(object_name or "").split(".")[-1]).strip()
+
+        # Bracketed identifiers: capture special characters like [dd hh:mm:ss.mss]
+        for match in re.finditer(r"\[([^\]]+)\]", text):
+            col = match.group(1).strip()
+            if not col:
+                continue
+            col_lower = col.lower()
+            if col_lower in {"dbo", "sys"}:
+                continue
+            if sp_name and col == sp_name:
+                continue
+            if col_lower.startswith(("sp_", "fn_", "vw_")):
+                continue
+            if col_lower in known_table_keys:
+                continue
+            columns.add(col)
+
+        # Remove bracketed identifiers with non-word chars to avoid partial token matches.
+        text = re.sub(r"\[[^\]]*[^A-Za-z0-9_\]]+[^\]]*\]", " ", text)
+
+        for part1, part2, part3 in re.findall(
+            r"([A-Za-z0-9_\[\]]+)\s*\.\s*([A-Za-z0-9_\[\]]+)\s*\.\s*([A-Za-z0-9_\[\]]+)",
+            text,
+        ):
+            col = self._normalize_sql_identifier(part3)
+            if col and col.lower() not in stopwords and not col.startswith("@"):
+                if sp_name and col == sp_name:
+                    continue
+                if col.lower() in known_table_keys:
+                    continue
+                columns.add(col)
+
+        for part1, part2 in re.findall(r"([A-Za-z0-9_\[\]]+)\s*\.\s*([A-Za-z0-9_\[\]]+)", text):
+            left = self._normalize_sql_identifier(part1)
+            right = self._normalize_sql_identifier(part2)
+            if not right:
+                continue
+            combined = f"{left}.{right}".lower() if left else right.lower()
+            if combined in known_table_keys:
+                continue
+            right_lower = right.lower()
+            if right_lower in stopwords or right_lower.startswith("@"):
+                continue
+            if sp_name and right == sp_name:
+                continue
+            if right_lower in known_table_keys:
+                continue
+            columns.add(right)
+
+        table_list = sorted(tables, key=lambda x: x.lower())[:max_tables]
+        column_list = sorted(columns, key=lambda x: x.lower())[:max_columns]
+        return {"tables": table_list, "columns": column_list}
+
+    @staticmethod
+    def _extract_plan_table_cardinality(plan_xml: str) -> Dict[str, int]:
+        if not plan_xml:
+            return {}
+        try:
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(plan_xml)
+        except Exception:
+            return {}
+        ns = {"sp": "http://schemas.microsoft.com/sqlserver/2004/07/showplan"}
+        cardinality_map: Dict[str, int] = {}
+        for node in root.findall(".//*[@TableCardinality]"):
+            raw_value = node.get("TableCardinality")
+            if not raw_value:
+                continue
+            try:
+                card_value = int(float(raw_value))
+            except Exception:
+                continue
+            if card_value <= 0:
+                continue
+            obj = node.find(".//sp:Object", ns)
+            if obj is None:
+                continue
+            schema_name = str(obj.get("Schema", "") or "dbo").strip("[]")
+            table_name = str(obj.get("Table", "") or "").strip("[]")
+            if not table_name:
+                continue
+            key = f"{schema_name}.{table_name}".lower()
+            if card_value > cardinality_map.get(key, 0):
+                cardinality_map[key] = card_value
+        return cardinality_map
+
+    @classmethod
+    def _apply_plan_table_rows(cls, existing_indexes: Any, plan_xml: str) -> Any:
+        if not isinstance(existing_indexes, list) or not plan_xml:
+            return existing_indexes
+        card_map = cls._extract_plan_table_cardinality(plan_xml)
+        if not card_map:
+            return existing_indexes
+        for table_info in existing_indexes:
+            if not isinstance(table_info, dict):
+                continue
+            table_name = str(table_info.get("table", "") or "")
+            if "." in table_name:
+                schema_name, bare_table = table_name.split(".", 1)
+            else:
+                schema_name, bare_table = "dbo", table_name
+            key = f"{schema_name}.{bare_table}".lower()
+            rows = card_map.get(key, 0)
+            if rows <= 0:
+                continue
+            indexes = table_info.get("indexes", [])
+            if not isinstance(indexes, list):
+                continue
+            for idx in indexes:
+                if not isinstance(idx, dict):
+                    continue
+                if int(idx.get("table_rows") or 0) <= 0:
+                    idx["table_rows"] = rows
+        return existing_indexes
+
+    def _format_object_constraints(self, source_code: str, object_name: str) -> str:
+        extracted = self._extract_source_objects(source_code, object_name)
+        tables = extracted.get("tables", [])
+        columns = extracted.get("columns", [])
+        if not tables and not columns:
+            return (
+                "## STRICT OBJECT REFERENCE RULES\n"
+                "No reliable object list was extracted; do NOT invent object names."
+            )
+        table_text = ", ".join(tables) if tables else "none"
+        column_text = ", ".join(columns) if columns else "none"
+        return (
+            "## STRICT OBJECT REFERENCE RULES\n"
+            "The procedure references ONLY these objects:\n"
+            f"- Tables: {table_text}\n"
+            f"- Columns: {column_text}\n"
+            "Do NOT reference objects not in the lists. "
+            "Do NOT confuse this procedure with sp_WhoIsActive."
+        )
+
+    @staticmethod
     def _compact_existing_indexes(
         existing_indexes: Any,
         max_tables: int = 5,
@@ -823,18 +1094,473 @@ class AIAnalysisService:
         for table_info in existing_indexes[:max_tables]:
             if not isinstance(table_info, dict):
                 continue
-            item = {
-                "table": table_info.get("table", table_info.get("table_hash", "")),
-                "indexes": [],
-            }
+            table_name = (
+                table_info.get("table")
+                or table_info.get("table_name")
+                or table_info.get("table_hash")
+                or ""
+            )
+            table_name = str(table_name or "").strip()
             indexes = table_info.get("indexes", [])
+            clean_indexes = []
             if isinstance(indexes, list):
-                item["indexes"] = indexes[:max_indexes_per_table]
-            compact.append(item)
+                for idx in indexes[:max_indexes_per_table]:
+                    if not isinstance(idx, dict):
+                        continue
+                    has_value = False
+                    for val in idx.values():
+                        if val is None:
+                            continue
+                        if isinstance(val, str) and not val.strip():
+                            continue
+                        if isinstance(val, (list, dict)) and not val:
+                            continue
+                        has_value = True
+                        break
+                    if has_value:
+                        clean_indexes.append(idx)
+            if not table_name:
+                continue
+            if not clean_indexes:
+                continue
+            compact.append({"table": table_name, "indexes": clean_indexes})
+        return compact
+
+    @staticmethod
+    def _compact_view_metadata(
+        view_metadata: Any,
+        max_indexes: int = 6,
+        max_warnings: int = 16,
+        max_kpis: int = 16,
+    ) -> Dict[str, Any]:
+        if not isinstance(view_metadata, dict):
+            return {}
+
+        compact = dict(view_metadata)
+
+        indexes = compact.get("indexed_view_indexes", [])
+        if isinstance(indexes, list):
+            compact["indexed_view_indexes"] = indexes[:max_indexes]
+        else:
+            compact["indexed_view_indexes"] = []
+
+        warnings = compact.get("warnings", [])
+        if isinstance(warnings, list):
+            compact["warnings"] = [str(item) for item in warnings[:max_warnings]]
+        else:
+            compact["warnings"] = []
+
+        monitor_kpis = compact.get("monitor_kpis", [])
+        if isinstance(monitor_kpis, list):
+            compact["monitor_kpis"] = monitor_kpis[:max_kpis]
+        else:
+            compact["monitor_kpis"] = []
+
+        usage_windows = compact.get("usage_windows", {})
+        if isinstance(usage_windows, dict):
+            compact["usage_windows"] = {
+                str(k): v for k, v in usage_windows.items() if str(k) in {"7", "14", "30", "90"}
+            }
+        else:
+            compact["usage_windows"] = {}
+
+        peak_hours = compact.get("peak_hours_30d", [])
+        if isinstance(peak_hours, list):
+            compact["peak_hours_30d"] = peak_hours[:8]
+        else:
+            compact["peak_hours_30d"] = []
+
+        src_signals = compact.get("source_static_signals", {})
+        if isinstance(src_signals, dict):
+            src_signals = dict(src_signals)
+            udf_calls = src_signals.get("scalar_udf_calls", [])
+            if isinstance(udf_calls, list):
+                src_signals["scalar_udf_calls"] = [str(x) for x in udf_calls[:12]]
+            else:
+                src_signals["scalar_udf_calls"] = []
+            compact["source_static_signals"] = src_signals
+        else:
+            compact["source_static_signals"] = {}
+
+        dep_summary = compact.get("dependency_summary", {})
+        if isinstance(dep_summary, dict):
+            dep_summary = dict(dep_summary)
+            refs = dep_summary.get("referenced_objects", [])
+            if isinstance(refs, list):
+                dep_summary["referenced_objects"] = refs[:30]
+            else:
+                dep_summary["referenced_objects"] = []
+            compact["dependency_summary"] = dep_summary
+        else:
+            compact["dependency_summary"] = {}
+
+        consumer_summary = compact.get("consumer_summary", {})
+        if isinstance(consumer_summary, dict):
+            consumer_summary = dict(consumer_summary)
+            refs = consumer_summary.get("referencing_objects", [])
+            if isinstance(refs, list):
+                consumer_summary["referencing_objects"] = refs[:30]
+            else:
+                consumer_summary["referencing_objects"] = []
+            compact["consumer_summary"] = consumer_summary
+        else:
+            compact["consumer_summary"] = {}
+
+        baseline_reliability = compact.get("baseline_reliability", {})
+        if not isinstance(baseline_reliability, dict):
+            compact["baseline_reliability"] = {}
+
+        statistics_health = compact.get("statistics_health", {})
+        if isinstance(statistics_health, dict):
+            statistics_health = dict(statistics_health)
+            stale = statistics_health.get("top_stale_statistics", [])
+            if isinstance(stale, list):
+                statistics_health["top_stale_statistics"] = stale[:20]
+            else:
+                statistics_health["top_stale_statistics"] = []
+            stale_tables = statistics_health.get("tables_with_stale_stats", [])
+            if isinstance(stale_tables, list):
+                statistics_health["tables_with_stale_stats"] = stale_tables[:20]
+            else:
+                statistics_health["tables_with_stale_stats"] = []
+            compact["statistics_health"] = statistics_health
+        else:
+            compact["statistics_health"] = {}
+
+        optimizer_context = compact.get("optimizer_context", {})
+        if not isinstance(optimizer_context, dict):
+            compact["optimizer_context"] = {}
+
+        wait_profile = compact.get("wait_profile", {})
+        if isinstance(wait_profile, dict):
+            wait_profile = dict(wait_profile)
+            top_waits = wait_profile.get("top_waits", [])
+            if isinstance(top_waits, list):
+                wait_profile["top_waits"] = top_waits[:8]
+            else:
+                wait_profile["top_waits"] = []
+            compact["wait_profile"] = wait_profile
+        else:
+            compact["wait_profile"] = {}
+
+        regression_signals = compact.get("regression_signals", {})
+        if not isinstance(regression_signals, dict):
+            compact["regression_signals"] = {}
+
+        blocking_deadlock_signals = compact.get("blocking_deadlock_signals", {})
+        if isinstance(blocking_deadlock_signals, dict):
+            b = dict(blocking_deadlock_signals)
+            active = b.get("active_blocking", {})
+            if isinstance(active, dict):
+                active = dict(active)
+                blocked_sessions = active.get("blocked_sessions", [])
+                if isinstance(blocked_sessions, list):
+                    active["blocked_sessions"] = blocked_sessions[:20]
+                else:
+                    active["blocked_sessions"] = []
+                b["active_blocking"] = active
+            deadlock = b.get("deadlock_activity", {})
+            if not isinstance(deadlock, dict):
+                b["deadlock_activity"] = {}
+            compact["blocking_deadlock_signals"] = b
+        else:
+            compact["blocking_deadlock_signals"] = {}
+
+        maintenance_signals = compact.get("maintenance_signals", {})
+        if isinstance(maintenance_signals, dict):
+            m = dict(maintenance_signals)
+            top_frag = m.get("top_fragmented_indexes", [])
+            if isinstance(top_frag, list):
+                m["top_fragmented_indexes"] = top_frag[:20]
+            else:
+                m["top_fragmented_indexes"] = []
+            top_stale = m.get("top_stale_stats_indexes", [])
+            if isinstance(top_stale, list):
+                m["top_stale_stats_indexes"] = top_stale[:20]
+            else:
+                m["top_stale_stats_indexes"] = []
+            compact["maintenance_signals"] = m
+        else:
+            compact["maintenance_signals"] = {}
+
+        schema_change_signals = compact.get("schema_change_signals", {})
+        if isinstance(schema_change_signals, dict):
+            sc = dict(schema_change_signals)
+            recent = sc.get("recent_changes", [])
+            if isinstance(recent, list):
+                sc["recent_changes"] = recent[:40]
+            else:
+                sc["recent_changes"] = []
+            compact["schema_change_signals"] = sc
+        else:
+            compact["schema_change_signals"] = {}
+
+        security_isolation_signals = compact.get("security_isolation_signals", {})
+        if isinstance(security_isolation_signals, dict):
+            si = dict(security_isolation_signals)
+            refs = si.get("referenced_owners", [])
+            if isinstance(refs, list):
+                si["referenced_owners"] = refs[:40]
+            else:
+                si["referenced_owners"] = []
+            compact["security_isolation_signals"] = si
+        else:
+            compact["security_isolation_signals"] = {}
+
+        infrastructure_signals = compact.get("infrastructure_signals", {})
+        if not isinstance(infrastructure_signals, dict):
+            compact["infrastructure_signals"] = {}
+
+        storage_profile = compact.get("storage_profile", {})
+        if isinstance(storage_profile, dict):
+            sp = dict(storage_profile)
+            largest = sp.get("largest_tables", [])
+            if isinstance(largest, list):
+                sp["largest_tables"] = largest[:30]
+            else:
+                sp["largest_tables"] = []
+            growth = sp.get("growth_outlook", {})
+            if not isinstance(growth, dict):
+                sp["growth_outlook"] = {}
+            compact["storage_profile"] = sp
+        else:
+            compact["storage_profile"] = {}
+
+        baseline = compact.get("monitoring_baseline", {})
+        if not isinstance(baseline, dict):
+            compact["monitoring_baseline"] = {}
+
         return compact
 
     @staticmethod
     def _anonymize_existing_indexes(existing_indexes: Any) -> list:
+        """
+        Anonymize existing indexes and CALCULATE derived metrics.
+        
+        CRITICAL FIX (2026-02-13): 
+        - Bu fonksiyon artık total_reads, is_used, access_pattern değerlerini
+          ham veriden (user_seeks, user_scans, user_lookups) hesaplıyor.
+        - Önceki versiyon sadece değerleri kopyalıyordu ve kaynak veri 0 ise
+          0/False/NO_READS olarak geçiyordu.
+        """
+        
+        def _to_int(value: Any) -> int:
+            """Safely convert to int"""
+            try:
+                if value is None:
+                    return 0
+                return int(float(value))
+            except Exception:
+                return 0
+        
+        def _derive_access_pattern(seeks: int, scans: int, total: int) -> str:
+            """
+            Calculate access pattern from usage statistics.
+            
+            Returns:
+                NO_READS: No read activity
+                SEEK_ONLY: Only seeks, no scans
+                SCAN_ONLY: Only scans, no seeks  
+                SEEK_DOMINANT: >70% seeks
+                SCAN_DOMINANT: <30% seeks (>70% scans)
+                MIXED: Between 30-70% seeks
+            """
+            if total <= 0:
+                return "NO_READS"
+            if seeks > 0 and scans <= 0:
+                return "SEEK_ONLY"
+            if scans > 0 and seeks <= 0:
+                return "SCAN_ONLY"
+            seek_ratio = float(seeks) / float(total)
+            if seek_ratio >= 0.70:
+                return "SEEK_DOMINANT"
+            if seek_ratio <= 0.30:
+                return "SCAN_DOMINANT"
+            return "MIXED"
+        
+        if not isinstance(existing_indexes, list):
+            return []
+        
+        anonymized: list = []
+        for table_info in existing_indexes:
+            if not isinstance(table_info, dict):
+                continue
+            table_name = str(table_info.get("table", "") or "")
+            item = {
+                "table": table_name,  # Keep original for reference
+                "table_hash": anonymize_identifier(table_name),
+                "indexes": [],
+            }
+            indexes = table_info.get("indexes", [])
+            if isinstance(indexes, list):
+                for idx in indexes:
+                    if not isinstance(idx, dict):
+                        continue
+                    
+                    # =====================================================
+                    # CRITICAL FIX: Calculate metrics from raw usage stats
+                    # =====================================================
+                    
+                    # Extract raw usage statistics (try multiple field names)
+                    user_seeks = _to_int(idx.get("user_seeks", idx.get("seeks", 0)))
+                    user_scans = _to_int(idx.get("user_scans", idx.get("scans", 0)))
+                    user_lookups = _to_int(idx.get("user_lookups", idx.get("lookups", 0)))
+                    user_updates = _to_int(idx.get("user_updates", idx.get("updates", 0)))
+                    
+                    # CALCULATE total_reads - don't just copy!
+                    total_reads_raw = _to_int(idx.get("total_reads", 0))
+                    total_reads_calc = user_seeks + user_scans + user_lookups
+                    # Use calculated value if > 0, otherwise fallback to raw
+                    total_reads = total_reads_calc if total_reads_calc > 0 else total_reads_raw
+                    
+                    # CALCULATE is_used - don't just copy!
+                    is_used = total_reads > 0 or user_updates > 0
+                    
+                    # CALCULATE access_pattern - don't just copy!
+                    access_pattern = _derive_access_pattern(user_seeks, user_scans, total_reads)
+                    
+                    # CALCULATE total_writes
+                    total_writes = user_updates
+                    
+                    # Calculate seek/scan percentages (new fields)
+                    seek_pct = round((user_seeks / total_reads) * 100.0, 2) if total_reads > 0 else 0.0
+                    scan_pct = round((user_scans / total_reads) * 100.0, 2) if total_reads > 0 else 0.0
+                    
+                    # Calculate read/write ratio (new field)
+                    read_write_ratio = round(float(total_reads) / float(user_updates), 3) if user_updates > 0 else float(total_reads)
+                    
+                    # =====================================================
+                    # END CRITICAL FIX
+                    # =====================================================
+                    
+                    item["indexes"].append(
+                        {
+                            "index_hash": anonymize_identifier(str(idx.get("name", "") or idx.get("index_name", ""))),
+                            "type": idx.get("type", idx.get("index_type", "")),
+                            "is_unique": bool(idx.get("is_unique", False)),
+                            "is_pk": bool(idx.get("is_pk", idx.get("is_primary_key", False))),
+                            "is_unique_constraint": bool(idx.get("is_unique_constraint", False)),
+                            "is_disabled": bool(idx.get("is_disabled", False)),
+                            "has_filter": bool(idx.get("has_filter", False)),
+                            "fill_factor": idx.get("fill_factor", 0),
+                            "is_padded": bool(idx.get("is_padded", False)),
+                            "allow_row_locks": bool(idx.get("allow_row_locks", True)),
+                            "allow_page_locks": bool(idx.get("allow_page_locks", True)),
+                            "data_compression_desc": idx.get("data_compression_desc", "UNKNOWN"),
+                            "is_duplicate": bool(idx.get("is_duplicate", False)),
+                            "duplicate_type": idx.get("duplicate_type", ""),
+                            "overlap_group_id": idx.get("overlap_group_id", ""),
+                            "covered_by": idx.get("covered_by", {}),
+                            "redundant_with_include": bool(idx.get("redundant_with_include", False)),
+                            "covered_by_index_hash": anonymize_identifier(str(idx.get("covered_by_index", ""))),
+                            "key_type_signature": idx.get("key_type_signature", ""),
+                            "left_prefix_signature": idx.get("left_prefix_signature", ""),
+                            "include_type_signature": idx.get("include_type_signature", ""),
+                            "include_signature": idx.get("include_signature", ""),
+                            "filter_signature": idx.get("filter_signature", ""),
+                            "key_column_count": idx.get("key_column_count", 0),
+                            "include_column_count": idx.get("include_column_count", 0),
+                            "key_column_total_bytes": idx.get("key_column_total_bytes", 0),
+                            "key_width_limit_bytes": idx.get("key_width_limit_bytes", 900),
+                            "key_width_over_limit": bool(idx.get("key_width_over_limit", False)),
+                            "all_columns_not_null": bool(idx.get("all_columns_not_null", False)),
+                            "all_columns_fixed_length": bool(idx.get("all_columns_fixed_length", False)),
+                            "has_lob_in_include": bool(idx.get("has_lob_in_include", False)),
+                            
+                            # ===== CALCULATED VALUES (THE FIX) =====
+                            "is_used": is_used,                    # ✅ NOW CALCULATED
+                            "access_pattern": access_pattern,      # ✅ NOW CALCULATED  
+                            "total_reads": total_reads,            # ✅ NOW CALCULATED
+                            "total_writes": total_writes,          # ✅ NOW CALCULATED
+                            "seek_pct": seek_pct,                  # ✅ NEW FIELD
+                            "scan_pct": scan_pct,                  # ✅ NEW FIELD
+                            "read_write_ratio": read_write_ratio,  # ✅ NEW FIELD
+                            
+                            # Raw values preserved for reference
+                            "seeks": user_seeks,
+                            "scans": user_scans,
+                            "lookups": user_lookups,
+                            "updates": user_updates,
+                            "user_seeks": user_seeks,
+                            "user_scans": user_scans,
+                            "user_lookups": user_lookups,
+                            "user_updates": user_updates,
+                            
+                            # Timestamps
+                            "last_user_seek": idx.get("last_user_seek"),
+                            "last_user_scan": idx.get("last_user_scan"),
+                            "last_user_lookup": idx.get("last_user_lookup"),
+                            "last_user_update": idx.get("last_user_update"),
+                            
+                            # Nested structures (pass through)
+                            "usage_window": idx.get("usage_window", {}),
+                            "reads": idx.get("reads", {}),
+                            "writes": idx.get("writes", {}),
+                            "derived_metrics": idx.get("derived_metrics", {}),
+                            
+                            # Table/size metrics
+                            "table_rows": idx.get("table_rows", 0),
+                            "reserved_mb": idx.get("reserved_mb", 0),
+                            "used_mb": idx.get("used_mb", 0),
+                            "data_mb": idx.get("data_mb", 0),
+                            "index_mb": idx.get("index_mb", 0),
+                            "unused_mb": idx.get("unused_mb", 0),
+                            "partition_count": idx.get("partition_count", 0),
+                            "partition_scheme_name": idx.get("partition_scheme_name", ""),
+                            
+                            # Fragmentation metrics
+                            "avg_fragmentation_in_percent": idx.get("avg_fragmentation_in_percent", 0),
+                            "fragment_count": idx.get("fragment_count", 0),
+                            "avg_fragment_size_in_pages": idx.get("avg_fragment_size_in_pages", 0),
+                            "avg_page_space_used_in_percent": idx.get("avg_page_space_used_in_percent", 0),
+                            "page_count": idx.get("page_count", 0),
+                            "ghost_record_count": idx.get("ghost_record_count", 0),
+                            "version_ghost_record_count": idx.get("version_ghost_record_count", 0),
+                            "forwarded_record_count": idx.get("forwarded_record_count", 0),
+                            "index_depth": idx.get("index_depth", 0),
+                            "index_level": idx.get("index_level", 0),
+                            "alloc_unit_type_desc": idx.get("alloc_unit_type_desc", ""),
+                            "physical_scan_mode": idx.get("physical_scan_mode", "LIMITED"),
+                            
+                            # Statistics health
+                            "last_stats_update": idx.get("last_stats_update"),
+                            "stats_rows": idx.get("stats_rows", 0),
+                            "rows_sampled": idx.get("rows_sampled", 0),
+                            "modification_counter": idx.get("modification_counter", 0),
+                            "modification_ratio": idx.get("modification_ratio", 0),
+                            "days_since_last_stats_update": idx.get("days_since_last_stats_update", 0),
+                            "stats_auto_created": bool(idx.get("stats_auto_created", False)),
+                            "stats_user_created": bool(idx.get("stats_user_created", False)),
+                            "stats_no_recompute": bool(idx.get("stats_no_recompute", False)),
+                            "stats_is_incremental": bool(idx.get("stats_is_incremental", False)),
+                            "stats_needs_update": bool(idx.get("stats_needs_update", False)),
+                            
+                            # Operational stats
+                            "leaf_insert_count": idx.get("leaf_insert_count", 0),
+                            "leaf_update_count": idx.get("leaf_update_count", 0),
+                            "leaf_delete_count": idx.get("leaf_delete_count", 0),
+                            "range_scan_count": idx.get("range_scan_count", 0),
+                            "singleton_lookup_count": idx.get("singleton_lookup_count", 0),
+                            
+                            # Locking stats
+                            "row_lock_count": idx.get("row_lock_count", 0),
+                            "row_lock_wait_count": idx.get("row_lock_wait_count", 0),
+                            "row_lock_wait_in_ms": idx.get("row_lock_wait_in_ms", 0),
+                            "page_lock_count": idx.get("page_lock_count", 0),
+                            "page_lock_wait_count": idx.get("page_lock_wait_count", 0),
+                            "page_lock_wait_in_ms": idx.get("page_lock_wait_in_ms", 0),
+                            "page_io_latch_wait_count": idx.get("page_io_latch_wait_count", 0),
+                            "page_io_latch_wait_in_ms": idx.get("page_io_latch_wait_in_ms", 0),
+                            "page_latch_wait_count": idx.get("page_latch_wait_count", 0),
+                            "page_latch_wait_in_ms": idx.get("page_latch_wait_in_ms", 0),
+                            "contention_score": idx.get("contention_score", 0),
+                            
+                            # FK support
+                            "supports_fk": bool(idx.get("supports_fk", False)),
+                        }
+                    )
+            anonymized.append(item)
+        return anonymized
         if not isinstance(existing_indexes, list):
             return []
         anonymized: list = []
@@ -1018,9 +1744,7 @@ class AIAnalysisService:
             for q in top_queries[:5]:
                 if not isinstance(q, dict):
                     continue
-                # Explicit privacy rule: do not include raw SQL text in LLM payload.
-                item = {k: v for k, v in q.items() if k != "query_text"}
-                normalized.append(item)
+                normalized.append(dict(q))
             compact["top_queries"] = normalized
 
         query_patterns = query_store.get("query_patterns", [])
@@ -1028,6 +1752,326 @@ class AIAnalysisService:
             compact["query_patterns"] = [q for q in query_patterns[:10] if isinstance(q, dict)]
 
         return compact
+
+    @staticmethod
+    def _safe_int(value: Any) -> int:
+        try:
+            return int(float(value))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _safe_float(value: Any) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+    @classmethod
+    def _summarize_execution_stats(cls, stats: Any) -> str:
+        if not isinstance(stats, dict) or not stats:
+            return "No execution stats"
+        parts = []
+        exec_count = cls._safe_int(stats.get("execution_count"))
+        if exec_count > 0:
+            parts.append(f"execs={exec_count:,}")
+        avg_duration = cls._safe_float(stats.get("avg_duration_ms"))
+        if avg_duration > 0:
+            parts.append(f"avg_duration_ms={avg_duration:.0f}")
+        avg_cpu = cls._safe_float(stats.get("avg_cpu_ms"))
+        if avg_cpu > 0:
+            parts.append(f"avg_cpu_ms={avg_cpu:.0f}")
+        avg_reads = cls._safe_float(stats.get("avg_logical_reads"))
+        if avg_reads > 0:
+            parts.append(f"avg_logical_reads={avg_reads:,.0f}")
+        plan_count = cls._safe_int(stats.get("plan_count"))
+        if plan_count > 0:
+            parts.append(f"plan_count={plan_count}")
+        return ", ".join(parts) if parts else "No execution stats"
+
+    @classmethod
+    def _summarize_query_store(cls, query_store: Any) -> str:
+        if not isinstance(query_store, dict) or not query_store:
+            return "No Query Store data"
+        status = query_store.get("status", {}) if isinstance(query_store.get("status"), dict) else {}
+        if status and not status.get("is_operational", True):
+            state = status.get("actual_state", "") or "disabled"
+            return f"Query Store disabled ({state})"
+        summary = query_store.get("summary", {}) if isinstance(query_store.get("summary"), dict) else {}
+        parts = []
+        days = cls._safe_int(query_store.get("days"))
+        if days > 0:
+            parts.append(f"window_days={days}")
+        execs = summary.get("total_executions", summary.get("execution_count"))
+        execs = cls._safe_int(execs)
+        if execs > 0:
+            parts.append(f"execs={execs:,}")
+        avg_duration = cls._safe_float(summary.get("avg_duration_ms"))
+        if avg_duration > 0:
+            parts.append(f"avg_duration_ms={avg_duration:.0f}")
+        avg_cpu = cls._safe_float(summary.get("avg_cpu_ms"))
+        if avg_cpu > 0:
+            parts.append(f"avg_cpu_ms={avg_cpu:.0f}")
+        avg_reads = cls._safe_float(summary.get("avg_logical_reads"))
+        if avg_reads > 0:
+            parts.append(f"avg_logical_reads={avg_reads:,.0f}")
+        plan_count = cls._safe_int(summary.get("plan_count"))
+        if plan_count > 0:
+            parts.append(f"plan_count={plan_count}")
+        waits = query_store.get("waits", [])
+        if isinstance(waits, list) and waits:
+            parts.append(f"waits={len(waits)}")
+        top_queries = query_store.get("top_queries", [])
+        if isinstance(top_queries, list) and top_queries:
+            parts.append(f"top_queries={len(top_queries)}")
+        return ", ".join(parts) if parts else "Query Store data present"
+
+    @classmethod
+    def _summarize_plan_insights(cls, plan_insights: Any) -> str:
+        if not isinstance(plan_insights, dict) or not plan_insights:
+            return "No plan insights"
+        parts = []
+        warnings = plan_insights.get("warnings", [])
+        if isinstance(warnings, list) and warnings:
+            parts.append(f"warnings={len(warnings)}")
+        expensive = plan_insights.get("expensive_operators", [])
+        if isinstance(expensive, list) and expensive:
+            parts.append(f"expensive_ops={len(expensive)}")
+        missing = plan_insights.get("missing_indexes", [])
+        if isinstance(missing, list) and missing:
+            parts.append(f"missing_indexes={len(missing)}")
+        primary = str(plan_insights.get("primary_access_operator", "") or "").strip()
+        if primary:
+            parts.append(f"primary={primary}")
+        flags = []
+        for key, label in (
+            ("has_table_scan", "table_scan"),
+            ("has_key_lookup", "key_lookup"),
+            ("has_sort", "sort"),
+            ("has_clustered_index_scan", "clustered_scan"),
+            ("has_clustered_index_seek", "clustered_seek"),
+            ("has_index_scan", "index_scan"),
+            ("has_index_seek", "index_seek"),
+            ("has_implicit_conversion", "implicit_convert"),
+        ):
+            if bool(plan_insights.get(key, False)):
+                flags.append(label)
+        if flags:
+            parts.append("flags=" + ",".join(flags))
+        return ", ".join(parts) if parts else "Plan insights present"
+
+    @classmethod
+    def _summarize_existing_indexes(cls, existing_indexes: Any) -> str:
+        if not isinstance(existing_indexes, list) or not existing_indexes:
+            return "none"
+        tables = 0
+        index_count = 0
+        for table_info in existing_indexes:
+            if not isinstance(table_info, dict):
+                continue
+            tables += 1
+            indexes = table_info.get("indexes", [])
+            if isinstance(indexes, list):
+                index_count += len(indexes)
+        return f"tables={tables}, indexes={index_count}" if tables > 0 else "none"
+
+    @classmethod
+    def _summarize_missing_indexes(cls, missing_indexes: Any) -> str:
+        if not isinstance(missing_indexes, list) or not missing_indexes:
+            return "none"
+        max_impact = 0.0
+        for row in missing_indexes:
+            if not isinstance(row, dict):
+                continue
+            impact = row.get("impact_score", row.get("avg_user_impact", row.get("impact", row.get("impact_pct", 0))))
+            max_impact = max(max_impact, cls._safe_float(impact))
+        if max_impact > 0:
+            return f"count={len(missing_indexes)}, max_impact={max_impact:.1f}"
+        return f"count={len(missing_indexes)}"
+
+    @classmethod
+    def _summarize_index_gate(cls, index_gate: Any) -> str:
+        if not isinstance(index_gate, dict) or not index_gate:
+            return "not evaluated"
+        parts = [f"allowed={bool(index_gate.get('allowed', True))}"]
+        coverage = cls._safe_float(index_gate.get("coverage_ratio"))
+        if coverage > 0:
+            parts.append(f"coverage_ratio={coverage:.2f}")
+        usage = cls._safe_float(index_gate.get("usage_coverage_ratio"))
+        if usage > 0:
+            parts.append(f"usage_coverage_ratio={usage:.2f}")
+        window = cls._safe_int(index_gate.get("usage_window_days"))
+        if window > 0:
+            parts.append(f"window_days={window}")
+        hints = index_gate.get("missing_data_hints", [])
+        if isinstance(hints, list) and hints:
+            parts.append("hints=" + ", ".join(str(h) for h in hints[:5]))
+        return ", ".join(parts)
+
+    @classmethod
+    def _summarize_parameter_sniffing(cls, parameter_sniffing: Any) -> str:
+        if not isinstance(parameter_sniffing, dict) or not parameter_sniffing:
+            return "not available"
+        parts = []
+        risk = str(parameter_sniffing.get("risk_level", "") or "").strip()
+        if risk:
+            parts.append(f"risk={risk}")
+        plan_count = cls._safe_int(parameter_sniffing.get("plan_count"))
+        if plan_count > 0:
+            parts.append(f"plans={plan_count}")
+        duration_cv = cls._safe_float(parameter_sniffing.get("duration_variance"))
+        if duration_cv > 0:
+            parts.append(f"duration_cv_pct={duration_cv:.1f}")
+        cpu_cv = cls._safe_float(parameter_sniffing.get("cpu_variance"))
+        if cpu_cv > 0:
+            parts.append(f"cpu_cv_pct={cpu_cv:.1f}")
+        indicators = parameter_sniffing.get("indicators", [])
+        if isinstance(indicators, list) and indicators:
+            parts.append("signals=" + "; ".join(str(i) for i in indicators[:3]))
+        return ", ".join(parts) if parts else "not available"
+
+    @classmethod
+    def _summarize_memory_grants(cls, memory_grants: Any) -> str:
+        if not isinstance(memory_grants, dict) or not memory_grants:
+            return "not available"
+        source = str(memory_grants.get("source", "") or "")
+        parts = []
+        if source:
+            parts.append(f"source={source}")
+        if "granted_memory_kb" in memory_grants:
+            granted = cls._safe_float(memory_grants.get("granted_memory_kb"))
+            used = cls._safe_float(memory_grants.get("used_memory_kb"))
+            util = memory_grants.get("utilization_pct")
+            if granted > 0:
+                parts.append(f"granted_kb={granted:.0f}")
+            if used > 0:
+                parts.append(f"used_kb={used:.0f}")
+            if util is not None:
+                parts.append(f"util_pct={cls._safe_float(util):.1f}")
+        else:
+            avg_kb = cls._safe_float(memory_grants.get("avg_memory_kb"))
+            max_kb = cls._safe_float(memory_grants.get("max_memory_kb"))
+            if avg_kb > 0:
+                parts.append(f"avg_kb={avg_kb:.0f}")
+            if max_kb > 0:
+                parts.append(f"max_kb={max_kb:.0f}")
+        return ", ".join(parts) if parts else "not available"
+
+    @classmethod
+    def _summarize_dependencies(cls, dependencies: Any) -> str:
+        if not isinstance(dependencies, list) or not dependencies:
+            return "none"
+        names = []
+        for dep in dependencies[:5]:
+            if isinstance(dep, dict):
+                name = dep.get("dep_name") or dep.get("name") or dep.get("object_name") or ""
+            else:
+                name = str(dep or "")
+            name = str(name).strip()
+            if name:
+                names.append(name)
+        if names:
+            return f"count={len(dependencies)}, sample={', '.join(names)}"
+        return f"count={len(dependencies)}"
+
+    @classmethod
+    def _summarize_completeness(cls, completeness: Any) -> str:
+        if not isinstance(completeness, dict) or not completeness:
+            return "unknown"
+        parts = []
+        level = str(completeness.get("quality_level", "") or "").strip()
+        if level:
+            parts.append(f"level={level}")
+        score = completeness.get("completeness_score")
+        if score is not None:
+            parts.append(f"score={cls._safe_float(score):.0f}%")
+        available = []
+        missing = []
+        for key, label in (
+            ("has_source_code", "source_code"),
+            ("has_execution_stats", "execution_stats"),
+            ("has_execution_plan", "execution_plan"),
+            ("has_query_store", "query_store"),
+        ):
+            if completeness.get(key) is True:
+                available.append(label)
+            elif completeness.get(key) is False:
+                missing.append(label)
+        if available:
+            parts.append("available=" + ",".join(available))
+        if missing:
+            parts.append("missing=" + ",".join(missing))
+        return ", ".join(parts) if parts else "unknown"
+
+    @classmethod
+    def _is_empty_value(cls, value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return not value.strip()
+        if isinstance(value, dict):
+            return len(value) == 0
+        if isinstance(value, list):
+            return len(value) == 0
+        return False
+
+    @classmethod
+    def _prune_empty(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            cleaned: Dict[str, Any] = {}
+            for key, item in value.items():
+                pruned = cls._prune_empty(item)
+                if cls._is_empty_value(pruned):
+                    continue
+                cleaned[key] = pruned
+            return cleaned
+        if isinstance(value, list):
+            cleaned_list: list = []
+            for item in value:
+                pruned = cls._prune_empty(item)
+                if cls._is_empty_value(pruned):
+                    continue
+                cleaned_list.append(pruned)
+            return cleaned_list
+        return value
+
+    def _build_sp_prompt_placeholders(
+        self,
+        *,
+        source_code: str,
+        object_name: str,
+        database_name: str,
+        stats: Dict[str, Any],
+        missing_indexes: list,
+        dependencies: list,
+        query_store: Dict[str, Any],
+        plan_insights: Dict[str, Any],
+        existing_indexes: list,
+        parameter_sniffing: Dict[str, Any],
+        memory_grants: Dict[str, Any],
+        completeness: Dict[str, Any],
+        index_gate: Dict[str, Any],
+        environment_policy: Dict[str, Any],
+        analysis_mode: str,
+    ) -> Dict[str, str]:
+        return {
+            "object_name": str(object_name or ""),
+            "database_name": str(database_name or ""),
+            "analysis_mode": str(analysis_mode or ""),
+            "sql_edition": str(environment_policy.get("engine_edition", "") or "Unknown"),
+            "completeness_summary": self._summarize_completeness(completeness),
+            "source_code": self._truncate_text(source_code, 1500),
+            "execution_stats_summary": self._summarize_execution_stats(stats),
+            "query_store_summary": self._summarize_query_store(query_store),
+            "plan_insights_summary": self._summarize_plan_insights(plan_insights),
+            "existing_indexes_summary": self._summarize_existing_indexes(existing_indexes),
+            "missing_index_signals_summary": self._summarize_missing_indexes(missing_indexes),
+            "index_gate_summary": self._summarize_index_gate(index_gate),
+            "parameter_sniffing_summary": self._summarize_parameter_sniffing(parameter_sniffing),
+            "memory_grants_summary": self._summarize_memory_grants(memory_grants),
+            "dependencies_summary": self._summarize_dependencies(dependencies),
+            "object_constraints": self._truncate_text(self._format_object_constraints(source_code, object_name), 1800),
+        }
 
     @staticmethod
     def _engine_edition_name(code: Any) -> str:
@@ -1270,8 +2314,6 @@ class AIAnalysisService:
             "output_contract": prompt_payload.get("output_contract", {}),
             # Full trace for reproducibility.
             "system_prompt": system_prompt,
-            "raw_user_prompt": user_prompt,
-            "context": context_data or {},
         }
 
     def _build_sp_analysis_json_input(
@@ -1287,6 +2329,7 @@ class AIAnalysisService:
         plan_meta: Dict[str, Any],
         plan_insights: Dict[str, Any],
         existing_indexes: list,
+        view_metadata: Dict[str, Any],
         parameter_sniffing: Dict[str, Any],
         historical_trend: Dict[str, Any],
         memory_grants: Dict[str, Any],
@@ -1298,8 +2341,11 @@ class AIAnalysisService:
         environment_policy: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Prepare structured SP analysis input with safe truncation limits."""
+        existing_indexes = self._apply_plan_table_rows(existing_indexes or [], plan_xml or "")
         compact_query_store = self._compact_query_store(query_store or {})
         compact_existing_indexes = self._compact_existing_indexes(existing_indexes or [])
+        plan_insights_compact = dict(plan_insights or {})
+        plan_insights_compact.pop("missing_indexes", None)
         index_dataset_v2 = build_index_analysis_dataset_v2(
             object_name=object_name,
             existing_indexes=compact_existing_indexes,
@@ -1309,7 +2355,10 @@ class AIAnalysisService:
             sql_version=self._get_sql_version_string(),
             policy_gate=index_recommendation_gate or {},
         )
-        return {
+        if isinstance(index_dataset_v2, dict):
+            index_dataset_v2 = dict(index_dataset_v2)
+            index_dataset_v2.pop("missing_index_signals", None)
+        payload = {
             "object_name": object_name,
             "object_type": object_type,
             "source_code": self._truncate_text(source_code, 6000),
@@ -1318,8 +2367,9 @@ class AIAnalysisService:
             "dependencies": (dependencies or [])[:20],
             "query_store": compact_query_store,
             "plan_meta": plan_meta or {},
-            "plan_insights": plan_insights or {},
+            "plan_insights": plan_insights_compact,
             "existing_indexes": compact_existing_indexes,
+            "view_metadata": self._compact_view_metadata(view_metadata or {}),
             "index_analysis_dataset_v2": index_dataset_v2,
             "index_pre_analysis": index_dataset_v2.get("pre_analysis", {}),
             "parameter_sniffing": parameter_sniffing or {},
@@ -1334,6 +2384,7 @@ class AIAnalysisService:
             "index_recommendation_gate": index_recommendation_gate or {},
             "missing_data_hints": (index_recommendation_gate or {}).get("missing_data_hints", []),
         }
+        return self._prune_empty(payload)
 
     @staticmethod
     def _calculate_read_write_ratio(reads: float, writes: float) -> float:
@@ -1521,44 +2572,229 @@ class AIAnalysisService:
         }
 
     @staticmethod
-    def _enforce_no_index_recommendations(response: str, gate: Dict[str, Any]) -> str:
-        """Hard-enforce index recommendation block when validation gate is not satisfied."""
+    def _enforce_no_index_recommendations(
+        response: str,
+        gate: Dict[str, Any],
+        *,
+        plan_signal_summary: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Hard-enforce index recommendation block when validation gate is not satisfied.
+
+        The model may still output executable index DDL even when the gate is BLOCKED. This function
+        suppresses CREATE/DROP/ALTER INDEX statements but keeps the rest of the analysis intact and
+        replaces them with non-executable candidate signatures and a missing-data checklist.
+        """
         if not response:
             return response
 
-        blocked_terms = (
-            "create index",
-            "drop index",
-            "alter index",
-            "missing index",
-            "index suggestion",
-            "index recommendation",
-        )
-        removed = 0
-        filtered_lines = []
-        for line in response.splitlines():
-            low = line.lower()
-            if any(term in low for term in blocked_terms):
-                removed += 1
-                continue
-            filtered_lines.append(line)
+        gate_reason = str((gate or {}).get("reason", "blocked") or "blocked")
 
-        filtered_lines.append("")
-        filtered_lines.append("---")
-        filtered_lines.append(
-            "⚠️ **Index Recommendation Gate:** Existing index coverage + usage validation "
-            "(dm_db_index_usage_stats) is incomplete, so index recommendations were suppressed."
+        def _parse_candidate_signature_from_ddl(sql_text: str) -> Dict[str, Any]:
+            if not sql_text:
+                return {}
+            ddl = sql_text.strip()
+            try:
+                idx_name_match = re.search(
+                    r"(?is)\bcreate\s+(?:unique\s+)?(?:clustered\s+|nonclustered\s+)?index\s+([^\s(]+)",
+                    ddl,
+                )
+                index_name = (idx_name_match.group(1).strip() if idx_name_match else "") if ddl else ""
+
+                table_match = re.search(
+                    r"(?is)\bon\s+([^\n(]+?)\s*\(",
+                    ddl,
+                )
+                table = (table_match.group(1).strip() if table_match else "")
+
+                key_match = re.search(r"(?is)\bon\s+[^\n(]+?\(\s*(.*?)\s*\)\s*(include\b|with\b|;|$)", ddl)
+                key_block = key_match.group(1) if key_match else ""
+
+                include_match = re.search(r"(?is)\binclude\s*\(\s*(.*?)\s*\)\s*(with\b|;|$)", ddl)
+                include_block = include_match.group(1) if include_match else ""
+
+                def _extract_cols(block: str) -> List[str]:
+                    cols: List[str] = []
+                    if not block:
+                        return cols
+                    for raw in block.splitlines():
+                        line = raw.strip()
+                        if not line or line.startswith("--"):
+                            continue
+                        line = line.split("--", 1)[0].strip()
+                        if not line:
+                            continue
+                        for part in line.split(","):
+                            seg = part.strip().rstrip(",").rstrip(")")
+                            if not seg:
+                                continue
+                            bracket = re.match(r"^\[([^\]]+)\]", seg)
+                            if bracket:
+                                cols.append(bracket.group(1).strip())
+                                continue
+                            token = re.match(r"^([A-Za-z_][A-Za-z0-9_$.]*)", seg)
+                            if token:
+                                cols.append(token.group(1).strip())
+                    return cols
+
+                key_cols = _extract_cols(key_block)
+                include_cols = _extract_cols(include_block)
+                return {
+                    "index_name": index_name,
+                    "table": table,
+                    "key_columns": key_cols,
+                    "include_columns": include_cols,
+                }
+            except Exception:
+                return {}
+
+        suppressed_candidates: List[Dict[str, Any]] = []
+        suppressed_blocks = 0
+        suppressed_lines = 0
+
+        ddl_create_drop_pattern = re.compile(
+            r"(?is)\b(create|drop)\s+(?:unique\s+)?(?:clustered\s+|nonclustered\s+)?index\b"
         )
-        filtered_lines.append(f"- Validation status: {gate.get('reason', 'blocked')}")
-        filtered_lines.append(f"- Covered indexes: {gate.get('usage_covered_index_count', 0)}/{gate.get('index_count', 0)}")
+        ddl_alter_pattern = re.compile(r"(?is)\balter\s+index\b")
+        maintenance_pattern = re.compile(r"(?is)\balter\s+index\b[\s\S]{0,200}\b(rebuild|reorganize)\b")
+
+        fence_pattern = re.compile(r"```[^\n]*\n(.*?)\n```", re.DOTALL)
+
+        def _is_blocked_index_ddl(sql_text: str) -> bool:
+            if ddl_create_drop_pattern.search(sql_text):
+                return True
+            if ddl_alter_pattern.search(sql_text) and not maintenance_pattern.search(sql_text):
+                return True
+            return False
+
+        def _replace_fence(match: re.Match) -> str:
+            nonlocal suppressed_blocks
+            content = match.group(1) or ""
+            if not _is_blocked_index_ddl(content):
+                return match.group(0)
+            suppressed_blocks += 1
+            candidate = _parse_candidate_signature_from_ddl(content)
+            if candidate:
+                suppressed_candidates.append(candidate)
+            lines = [
+                "```text",
+                f"[Index Recommendation Gate is BLOCKED: {gate_reason}. Executable INDEX DDL suppressed.]",
+                "```",
+            ]
+            if candidate:
+                table = str(candidate.get("table", "") or "")
+                idx_name = str(candidate.get("index_name", "") or "")
+                key_cols = [str(x) for x in (candidate.get("key_columns") or []) if str(x).strip()]
+                inc_cols = [str(x) for x in (candidate.get("include_columns") or []) if str(x).strip()]
+                lines.append("")
+                lines.append("**Candidate index signature (not executable)**")
+                if table:
+                    lines.append(f"- Table: `{table}`")
+                if idx_name:
+                    lines.append(f"- Index name: `{idx_name}`")
+                if key_cols:
+                    lines.append(f"- Key: {', '.join(f'`{x}`' for x in key_cols[:12])}")
+                if inc_cols:
+                    lines.append(f"- Include: {', '.join(f'`{x}`' for x in inc_cols[:20])}")
+                lines.append("")
+            return "\n".join(lines) + "\n"
+
+        updated = fence_pattern.sub(_replace_fence, response)
+
+        safe_lines: List[str] = []
+        suppress_inline_ddl = False
+        suppress_inline_budget = 0
+        for line in updated.splitlines():
+            if suppress_inline_ddl:
+                suppressed_lines += 1
+                suppress_inline_budget += 1
+                if ";" in line or not line.strip() or line.lstrip().startswith("#") or suppress_inline_budget >= 30:
+                    suppress_inline_ddl = False
+                    suppress_inline_budget = 0
+                continue
+
+            if re.search(r"(?is)^\s*(create|drop)\b.*\bindex\b", line):
+                suppressed_lines += 1
+                suppress_inline_ddl = True
+                suppress_inline_budget = 0
+                safe_lines.append(
+                    f"[Index Recommendation Gate is BLOCKED: {gate_reason}. Executable INDEX DDL suppressed.]"
+                )
+                continue
+
+            safe_lines.append(line)
+        updated = "\n".join(safe_lines)
+
+        # Ensure we leave a clear audit trail + a non-executable replacement.
+        appended: List[str] = []
+        appended.append("")
+        appended.append("---")
+        appended.append("## Index Recommendation Gate (Enforced)")
+        appended.append(
+            "⚠️ Index recommendations are **BLOCKED** because existing index coverage + usage validation "
+            "(dm_db_index_usage_stats) is incomplete. Any executable `CREATE/DROP/ALTER INDEX` statements "
+            "were suppressed (maintenance rebuild/reorganize is allowed)."
+        )
+        appended.append(f"- Reason: `{gate_reason}`")
+        appended.append(
+            f"- Covered indexes: {gate.get('usage_covered_index_count', 0)}/{gate.get('index_count', 0)}"
+        )
+
         hints = gate.get("missing_data_hints", [])
         if isinstance(hints, list) and hints:
-            filtered_lines.append("- Missing data hints:")
-            for hint in hints:
-                filtered_lines.append(f"  - {hint}")
-        if removed > 0:
-            filtered_lines.append(f"- Suppressed lines: {removed}")
-        return "\n".join(filtered_lines)
+            appended.append("- Missing data checklist:")
+            for hint in hints[:10]:
+                appended.append(f"  - {hint}")
+
+        # Replacement output: show candidate signature(s) without executable DDL.
+        candidates_to_show: List[Dict[str, Any]] = []
+        if suppressed_candidates:
+            candidates_to_show = suppressed_candidates[:3]
+        else:
+            ps = plan_signal_summary if isinstance(plan_signal_summary, dict) else {}
+            mi = ps.get("mi_columns_signature", [])
+            if isinstance(mi, list) and mi:
+                for item in mi[:3]:
+                    if not isinstance(item, dict):
+                        continue
+                    candidates_to_show.append(
+                        {
+                            "table": item.get("table", "") or item.get("table_hash", ""),
+                            "key_columns": [
+                                item.get("equality_signature", ""),
+                                item.get("inequality_signature", ""),
+                            ],
+                            "include_columns": [item.get("include_signature", "")],
+                            "impact_pct": item.get("impact_pct"),
+                        }
+                    )
+
+        if candidates_to_show:
+            appended.append("- Candidate index signature(s) (not executable):")
+            for c in candidates_to_show:
+                table = str(c.get("table", "") or "")
+                idx_name = str(c.get("index_name", "") or "")
+                key_cols = [str(x) for x in (c.get("key_columns") or []) if str(x).strip()]
+                inc_cols = [str(x) for x in (c.get("include_columns") or []) if str(x).strip()]
+                impact = c.get("impact_pct")
+                header = f"  - Table: `{table}`" if table else "  - Table: (unknown)"
+                if idx_name:
+                    header += f", Index name: `{idx_name}`"
+                if impact is not None:
+                    try:
+                        header += f", Estimated impact: {float(impact):.1f}%"
+                    except Exception:
+                        pass
+                appended.append(header)
+                if key_cols:
+                    appended.append(f"    - Key: {', '.join(f'`{x}`' for x in key_cols[:12])}")
+                if inc_cols:
+                    appended.append(f"    - Include: {', '.join(f'`{x}`' for x in inc_cols[:20])}")
+
+        if suppressed_blocks or suppressed_lines:
+            appended.append(f"- Suppressed code blocks: {suppressed_blocks}")
+            appended.append(f"- Suppressed standalone lines: {suppressed_lines}")
+
+        return updated.rstrip() + "\n" + "\n".join(appended) + "\n"
     
     def _run_self_reflection(
         self, 
@@ -1629,12 +2865,29 @@ class AIAnalysisService:
         """
         try:
             warnings = confidence.warnings[:5] if isinstance(confidence.warnings, list) else []
-            warning_text = "\n".join(f"- {w}" for w in warnings) if warnings else "- No explicit warning text was produced."
-            instruction_prompt = (
-                "Refine the previous report to improve reliability.\n"
-                "Address validation warnings directly, remove speculative claims, and keep evidence-grounded statements only.\n"
-                "Preserve the requested structure and output in English.\n"
+            warning_text = "\n".join(f"- {w}" for w in warnings) if warnings else ""
+            from app.ai.prompts.rules import apply_template, resolve_active_locale
+            from app.ai.prompts.yaml_store import PromptRulesStore
+
+            locale = resolve_active_locale()
+            store = PromptRulesStore()
+            global_instructions = store.load_rule(locale, "global").user.strip()
+            refinement_rule = store.load_rule(locale, "self_reflection_refinement")
+            refinement_system = refinement_rule.system
+            refinement_user = refinement_rule.user
+
+            template_values = {
+                "global_instructions": global_instructions,
+                "sql_version": "",
+                "object_name": object_name,
+                "object_type": object_type,
+                "warning_text": warning_text,
+                "warnings": "\n".join(str(w) for w in warnings) if warnings else "",
+            }
+            system_prompt_for_refinement = (
+                apply_template(refinement_system, template_values).strip() if refinement_system else system_prompt
             )
+            instruction_prompt = apply_template(refinement_user, template_values).strip()
             refinement_payload = self._build_json_user_prompt(
                 request_type=f"{getattr(analyzer_profile, 'request_type', 'object_performance_analysis')}_self_reflection_refinement",
                 metadata={
@@ -1660,7 +2913,7 @@ class AIAnalysisService:
             )
             return await self.llm_client.generate(
                 prompt=refinement_payload,
-                system_prompt=system_prompt,
+                system_prompt=system_prompt_for_refinement,
                 provider_id=self.provider_id,
                 temperature=0.05,
             )
@@ -1686,18 +2939,19 @@ class AIAnalysisService:
         object_name: str,
         object_type: str = "",
         database_name: str = "",
-        object_resolution: Dict[str, Any] = None,
-        stats: Dict[str, Any] = None,
-        missing_indexes: list = None,
-        dependencies: list = None,
-        query_store: Dict[str, Any] = None,
+        object_resolution: Optional[Dict[str, Any]] = None,
+        stats: Optional[Dict[str, Any]] = None,
+        missing_indexes: Optional[list] = None,
+        dependencies: Optional[list] = None,
+        query_store: Optional[Dict[str, Any]] = None,
         plan_xml: str = None,
-        plan_meta: Dict[str, Any] = None,
-        plan_insights: Dict[str, Any] = None,           # NEW
-        existing_indexes: list = None,                  # NEW
-        parameter_sniffing: Dict[str, Any] = None,      # NEW
-        historical_trend: Dict[str, Any] = None,        # NEW
-        memory_grants: Dict[str, Any] = None,           # NEW
+        plan_meta: Optional[Dict[str, Any]] = None,
+        plan_insights: Optional[Dict[str, Any]] = None,           # NEW
+        existing_indexes: Optional[list] = None,                  # NEW
+        view_metadata: Optional[Dict[str, Any]] = None,           # NEW
+        parameter_sniffing: Optional[Dict[str, Any]] = None,      # NEW
+        historical_trend: Optional[Dict[str, Any]] = None,        # NEW
+        memory_grants: Optional[Dict[str, Any]] = None,           # NEW
         streaming: bool = False,
         on_chunk: Optional[Callable[[str], None]] = None,
     ) -> str:
@@ -1761,11 +3015,9 @@ class AIAnalysisService:
                 index_gate=index_gate,
                 environment_policy=environment_policy,
             )
-            for block in analyzer_profile.prompt_blocks:
-                block_text = str(block or "").strip()
-                if block_text:
-                    user_prompt += f"\n\n{block_text}"
 
+            plan_insights_compact = dict(plan_insights or {})
+            plan_insights_compact.pop("missing_indexes", None)
             optimize_index_dataset = build_index_analysis_dataset_v2(
                 object_name=object_name,
                 existing_indexes=self._compact_existing_indexes(existing_indexes_anon or []),
@@ -1775,8 +3027,11 @@ class AIAnalysisService:
                 sql_version=self._get_sql_version_string(),
                 policy_gate=index_gate,
             )
+            if isinstance(optimize_index_dataset, dict):
+                optimize_index_dataset = dict(optimize_index_dataset)
+                optimize_index_dataset.pop("missing_index_signals", None)
 
-            optimize_context = {
+            optimize_context = self._prune_empty({
                 "object_name": object_name,
                 "object_type": normalized_object_type,
                 "stats": stats,
@@ -1784,8 +3039,9 @@ class AIAnalysisService:
                 "dependencies": (dependencies or [])[:20],
                 "query_store": self._compact_query_store(query_store or {}),
                 "plan_meta": plan_meta or {},
-                "plan_insights": plan_insights or {},
+                "plan_insights": plan_insights_compact,
                 "existing_indexes": self._compact_existing_indexes(existing_indexes_anon or []),
+                "view_metadata": self._compact_view_metadata(view_metadata or {}),
                 "index_analysis_dataset_v2": optimize_index_dataset,
                 "index_pre_analysis": optimize_index_dataset.get("pre_analysis", {}),
                 "parameter_sniffing": parameter_sniffing or {},
@@ -1796,7 +3052,7 @@ class AIAnalysisService:
                 "environment_policy": environment_policy or {},
                 "source_code": self._truncate_text(source_code, 6000),
                 "plan_xml": self._truncate_text(plan_xml, 6000),
-            }
+            })
 
             llm_json_prompt = self._build_json_user_prompt(
                 request_type=str(analyzer_profile.request_type).replace("_performance_analysis", "_code_optimization"),
@@ -1807,9 +3063,6 @@ class AIAnalysisService:
                 },
                 instruction_prompt=(
                     user_prompt
-                    + "\n\n### RESPONSE LANGUAGE\n"
-                    + "- Return SQL only.\n"
-                    + "- If comments are included, comments must be in English.\n"
                 ),
                 input_data=optimize_context,
                 output_contract={
@@ -1868,18 +3121,19 @@ class AIAnalysisService:
         object_name: str,
         object_type: str = "",
         database_name: str = "",
-        object_resolution: Dict[str, Any] = None,
-        stats: Dict[str, Any] = None,
-        missing_indexes: list = None,
-        dependencies: list = None,
-        query_store: Dict[str, Any] = None,
+        object_resolution: Optional[Dict[str, Any]] = None,
+        stats: Optional[Dict[str, Any]] = None,
+        missing_indexes: Optional[list] = None,
+        dependencies: Optional[list] = None,
+        query_store: Optional[Dict[str, Any]] = None,
         plan_xml: str = None,
-        plan_meta: Dict[str, Any] = None,
-        plan_insights: Dict[str, Any] = None,
-        existing_indexes: list = None,
-        parameter_sniffing: Dict[str, Any] = None,
-        historical_trend: Dict[str, Any] = None,
-        memory_grants: Dict[str, Any] = None,
+        plan_meta: Optional[Dict[str, Any]] = None,
+        plan_insights: Optional[Dict[str, Any]] = None,
+        existing_indexes: Optional[list] = None,
+        view_metadata: Optional[Dict[str, Any]] = None,
+        parameter_sniffing: Optional[Dict[str, Any]] = None,
+        historical_trend: Optional[Dict[str, Any]] = None,
+        memory_grants: Optional[Dict[str, Any]] = None,
         streaming: bool = False,
         on_chunk: Optional[Callable[[str], None]] = None,
     ) -> str:
@@ -1900,6 +3154,7 @@ class AIAnalysisService:
             plan_meta=plan_meta,
             plan_insights=plan_insights,
             existing_indexes=existing_indexes,
+            view_metadata=view_metadata,
             parameter_sniffing=parameter_sniffing,
             historical_trend=historical_trend,
             memory_grants=memory_grants,
@@ -1911,8 +3166,8 @@ class AIAnalysisService:
         self,
         query_text: str,
         table_info: Dict[str, Any],
-        missing_index_dmv: Dict[str, Any] = None,
-        existing_indexes: list = None
+        missing_index_dmv: Optional[Dict[str, Any]] = None,
+        existing_indexes: Optional[list] = None
     ) -> str:
         """
         Index önerisi al
@@ -1941,12 +3196,6 @@ class AIAnalysisService:
                 existing_indexes=existing_indexes,
                 context=PromptContext(sql_version=self._get_sql_version_string())
             )
-            user_prompt += (
-                "\n\n### MANDATORY VALIDATION RULE\n"
-                "- Generate index recommendation only after validating existing index coverage and usage "
-                "from dm_db_index_usage_stats.\n"
-                "- Include this validation result in rationale.\n"
-            )
 
             llm_json_prompt = self._build_json_user_prompt(
                 request_type="index_recommendation",
@@ -1974,10 +3223,12 @@ class AIAnalysisService:
                 provider_id=self.provider_id,
                 temperature=0.1,
             )
-            
+
             # Validate index syntax
             validation = self.response_validator.validate(response)
-            return validation.sanitized_response
+            sanitized = validation.sanitized_response
+            sanitized = self._append_version_compat_notes(sanitized, validation)
+            return sanitized
             
         except Exception as e:
             logger.error(f"Index recommendation failed: {e}")
@@ -2005,6 +3256,34 @@ class AIAnalysisService:
         if parts:
             return f"{friendly} ({', '.join(parts)})"
         return friendly
+
+    @staticmethod
+    def _append_version_compat_notes(response: str, validation: ValidationResult) -> str:
+        version_issues = [i for i in (validation.issues or []) if (i.category or "").lower() == "version"]
+        if not version_issues:
+            return response
+
+        cleaned = (response or "").strip()
+        looks_sql_only = bool(cleaned) and ("```" not in cleaned) and ("#" not in cleaned) and (
+            cleaned[:20].upper().lstrip().startswith(("SELECT", "WITH", "CREATE", "ALTER", "DECLARE", "SET"))
+        )
+
+        if looks_sql_only:
+            lines = ["", "", "-- SQL Server Version Compatibility Notes"]
+            for issue in version_issues[:8]:
+                suggestion = f" Suggestion: {issue.suggestion}" if issue.suggestion else ""
+                lines.append(f"-- - {issue.message}{suggestion}")
+            if len(version_issues) > 8:
+                lines.append(f"-- - (+{len(version_issues) - 8} more)")
+            return response + "\n".join(lines)
+
+        lines = ["\n\n---", "⚠️ **SQL Server Version Compatibility Notes**"]
+        for issue in version_issues[:8]:
+            suggestion = f" Suggestion: {issue.suggestion}" if issue.suggestion else ""
+            lines.append(f"- {issue.message}{suggestion}")
+        if len(version_issues) > 8:
+            lines.append(f"- (+{len(version_issues) - 8} more)")
+        return response + "\n".join(lines)
 
     @staticmethod
     def _strip_code_fences(text: str) -> str:
@@ -2047,6 +3326,37 @@ class AIAnalysisService:
         if idx == -1:
             return ""
         return text[idx:]
+
+    @staticmethod
+    def _merge_continuation(base_text: str, continuation: str, max_overlap: int = 1600) -> str:
+        if not base_text:
+            return continuation
+        if not continuation:
+            return base_text
+        base = base_text
+        cont = continuation
+        max_len = min(len(base), len(cont), max_overlap)
+        for size in range(max_len, 39, -1):
+            if base[-size:] == cont[:size]:
+                cont = cont[size:]
+                break
+        return base.rstrip() + "\n" + cont.lstrip()
+
+    @staticmethod
+    def _dedupe_adjacent_lines(text: str) -> str:
+        if not text:
+            return text
+        lines = text.splitlines()
+        out = []
+        last_non_empty = None
+        for line in lines:
+            stripped = line.strip()
+            if stripped and last_non_empty is not None and stripped == last_non_empty:
+                continue
+            out.append(line)
+            if stripped:
+                last_non_empty = stripped
+        return "\n".join(out)
 
     async def _continue_sql_if_truncated(
         self,
@@ -2141,13 +3451,13 @@ class AIAnalysisService:
             cont = cont.strip()
             if not cont:
                 break
-            assembled = assembled.rstrip() + "\n" + cont.lstrip()
+            assembled = self._merge_continuation(assembled, cont)
             tail_sql = self._extract_tail_sql(assembled)
             if not self._has_unclosed_code_fence(assembled) and (
                 not tail_sql or self._is_sql_complete(tail_sql)
             ):
                 break
-        return assembled
+        return self._dedupe_adjacent_lines(assembled)
 
     def _log_analysis_request(
         self,
@@ -2158,6 +3468,18 @@ class AIAnalysisService:
         context_data: Dict[str, Any],
     ) -> None:
         """Persist analysis request payload for audit/debug."""
+        payload = self._build_export_request_payload(
+            query_id=query_id,
+            query_name=query_name,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            context_data=context_data,
+            cache_hit=False,
+            llm_request_performed=True,
+        )
+        # Always keep payload available for UI export, even if log write fails.
+        self._last_request_payload = payload
+        self._last_request_file_path = None
         try:
             ensure_app_dirs()
             settings = get_settings()
@@ -2166,22 +3488,12 @@ class AIAnalysisService:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in query_name)[:60]
             file_path = logs_dir / f"ai_request_{safe_name}_{query_id}_{timestamp}.json"
-
-            payload = self._build_export_request_payload(
-                query_id=query_id,
-                query_name=query_name,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                context_data=context_data,
-                cache_hit=False,
-                llm_request_performed=True,
-            )
-            self._last_request_payload = payload
             self._last_request_file_path = str(file_path)
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
         except Exception as e:
             logger.warning(f"Failed to log AI request: {e}")
+            self._last_request_file_path = None
 
     def _log_analysis_result(
         self,
@@ -2276,6 +3588,7 @@ class AIAnalysisService:
         *,
         object_name: str,
         stats: Dict[str, Any],
+        query_store: Optional[Dict[str, Any]] = None,
         historical_trend: Dict[str, Any],
         index_pre_analysis: Dict[str, Any],
         plan_signal_summary: Dict[str, Any],
@@ -2290,10 +3603,11 @@ class AIAnalysisService:
             cls = {}
         cls_counts = cls.get("counts", {}) if isinstance(cls.get("counts", {}), dict) else {}
 
-        baseline_duration = self._to_num(stats.get("avg_duration_ms"), 0.0)
-        baseline_cpu = self._to_num(stats.get("avg_cpu_ms"), 0.0)
-        baseline_reads = self._to_num(stats.get("avg_logical_reads"), 0.0)
-        execution_count = self._fmt_int(stats.get("execution_count", 0))
+        baseline = self._resolve_baseline_metrics(stats=stats or {}, query_store=query_store or {})
+        baseline_duration = self._to_num(baseline.get("avg_duration_ms"), 0.0)
+        baseline_cpu = self._to_num(baseline.get("avg_cpu_ms"), 0.0)
+        baseline_reads = self._to_num(baseline.get("avg_logical_reads"), 0.0)
+        execution_count = self._fmt_int(baseline.get("execution_count", 0))
 
         trend = historical_trend if isinstance(historical_trend, dict) else {}
         trend_dir = str(trend.get("trend_direction", "stable") or "stable")
@@ -2359,6 +3673,63 @@ class AIAnalysisService:
             f"{sentence3}"
         )
 
+    @staticmethod
+    def _resolve_baseline_metrics(*, stats: Dict[str, Any], query_store: Dict[str, Any]) -> Dict[str, Any]:
+        def _to_float(value: Any) -> float:
+            try:
+                if value is None:
+                    return 0.0
+                return float(value)
+            except Exception:
+                return 0.0
+
+        def _to_int(value: Any) -> int:
+            try:
+                if value is None:
+                    return 0
+                return int(float(value))
+            except Exception:
+                return 0
+
+        stats_duration = _to_float((stats or {}).get("avg_duration_ms"))
+        stats_cpu = _to_float((stats or {}).get("avg_cpu_ms"))
+        stats_reads = _to_float((stats or {}).get("avg_logical_reads"))
+        stats_exec = _to_int((stats or {}).get("execution_count"))
+        stats_has_signal = stats_exec > 0 or stats_duration > 0.0 or stats_cpu > 0.0 or stats_reads > 0.0
+
+        summary = {}
+        if isinstance(query_store, dict) and isinstance(query_store.get("summary"), dict):
+            summary = query_store.get("summary") or {}
+        qs_duration = _to_float(summary.get("avg_duration_ms"))
+        qs_cpu = _to_float(summary.get("avg_cpu_ms"))
+        qs_reads = _to_float(summary.get("avg_logical_reads"))
+        qs_exec = _to_int(summary.get("execution_count") or summary.get("total_executions"))
+        qs_has_signal = qs_exec > 0 or qs_duration > 0.0 or qs_cpu > 0.0 or qs_reads > 0.0
+
+        if stats_has_signal:
+            return {
+                "avg_duration_ms": stats_duration,
+                "avg_cpu_ms": stats_cpu,
+                "avg_logical_reads": stats_reads,
+                "execution_count": stats_exec,
+                "source": "execution_stats",
+            }
+        if qs_has_signal:
+            return {
+                "avg_duration_ms": qs_duration,
+                "avg_cpu_ms": qs_cpu,
+                "avg_logical_reads": qs_reads,
+                "execution_count": qs_exec,
+                "source": "query_store.summary",
+            }
+        return {
+            "avg_duration_ms": 0.0,
+            "avg_cpu_ms": 0.0,
+            "avg_logical_reads": 0.0,
+            "execution_count": 0,
+            "source": "none",
+        }
+
     def _ensure_auto_executive_summary(self, response: str, summary_block: str) -> str:
         if not response:
             return summary_block or response
@@ -2366,7 +3737,31 @@ class AIAnalysisService:
             return response
         if self.AUTO_EXECUTIVE_SUMMARY_MARKER.lower() in response.lower():
             return response
+        if re.search(r"^\s*#{1,6}\s+.*Executive Summary", response, flags=re.IGNORECASE | re.MULTILINE):
+            return response
         return f"{summary_block}\n\n{response}"
+
+    @staticmethod
+    def _enforce_plan_operator_terminology(response: str, plan_insights: Dict[str, Any]) -> str:
+        """Prevent obvious seek/scan terminology drift when plan facts disagree.
+
+        This is intentionally narrow: only corrects cases where a scan is claimed but the plan
+        explicitly indicates it is absent while the corresponding seek is present.
+        """
+        if not response or not isinstance(plan_insights, dict):
+            return response
+
+        has_cix_scan = bool(plan_insights.get("has_clustered_index_scan", False))
+        has_cix_seek = bool(plan_insights.get("has_clustered_index_seek", False))
+        if not has_cix_scan and has_cix_seek:
+            response = re.sub(r"(?i)\bclustered index scan\b", "Clustered Index Seek", response)
+
+        has_ix_scan = bool(plan_insights.get("has_index_scan", False))
+        has_ix_seek = bool(plan_insights.get("has_index_seek", False))
+        if not has_ix_scan and has_ix_seek:
+            response = re.sub(r"(?i)\bindex scan\b", "Index Seek", response)
+
+        return response
     
     def _format_waits(self, waits: Dict[str, float]) -> str:
         """Wait profili formatla"""

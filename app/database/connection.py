@@ -7,11 +7,13 @@ from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from threading import Lock
 
 import pyodbc
 from PyQt6.QtCore import QObject, pyqtSignal
 from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError as SAOperationalError
 from sqlalchemy.pool import QueuePool
 
 from app.models.connection_profile import ConnectionProfile, AuthMethod
@@ -79,6 +81,8 @@ class DatabaseConnection:
         self._status: ConnectionStatus = ConnectionStatus.DISCONNECTED
         self._info: Optional[ConnectionInfo] = None
         self._last_error: Optional[str] = None
+        self._active_query_lock = Lock()
+        self._active_dbapi_connection: Optional[Any] = None
         
         from app.services.credential_store import get_credential_store
         self._credential_store = get_credential_store()
@@ -242,10 +246,148 @@ class DatabaseConnection:
         if self._engine:
             self._engine.dispose()
             self._engine = None
+        with self._active_query_lock:
+            self._active_dbapi_connection = None
         
         self._status = ConnectionStatus.DISCONNECTED
         self._info = None
         logger.info(f"Disconnected from {self.profile.server}")
+
+    def _set_active_dbapi_connection(self, raw_connection: Any) -> None:
+        with self._active_query_lock:
+            self._active_dbapi_connection = raw_connection
+
+    def _clear_active_dbapi_connection(self) -> None:
+        with self._active_query_lock:
+            self._active_dbapi_connection = None
+
+    @staticmethod
+    def _apply_query_timeout(raw_connection: Any, timeout: int) -> None:
+        """
+        Best-effort query execution timeout for pyodbc connections.
+
+        Notes:
+        - `SET LOCK_TIMEOUT` only controls lock waits, not total execution time.
+        - pyodbc supports per-connection default query timeout via `Connection.timeout`.
+        - SQLAlchemy may wrap the DBAPI connection; try common wrapper attributes.
+        """
+        try:
+            timeout_value = int(timeout)
+        except Exception:
+            return
+
+        candidates = [raw_connection]
+        for attr in ("connection", "driver_connection"):
+            val = getattr(raw_connection, attr, None)
+            if val is not None:
+                candidates.append(val)
+
+        for target in candidates:
+            try:
+                if hasattr(target, "timeout"):
+                    target.timeout = timeout_value
+            except Exception:
+                # Ignore drivers/wrappers that don't allow setting timeout.
+                pass
+
+    def cancel_active_query(self) -> bool:
+        """
+        Best-effort cancellation for currently running DB operation.
+        Returns True if a cancel request was sent successfully.
+        """
+        with self._active_query_lock:
+            raw = self._active_dbapi_connection
+
+        if raw is None:
+            return False
+
+        candidates = [raw]
+        for attr in ("connection", "driver_connection"):
+            val = getattr(raw, attr, None)
+            if val is not None:
+                candidates.append(val)
+
+        for target in candidates:
+            cancel_fn = getattr(target, "cancel", None)
+            if callable(cancel_fn):
+                try:
+                    cancel_fn()
+                    logger.info("Active query cancellation requested.")
+                    return True
+                except Exception as e:
+                    logger.debug(f"Active query cancel() failed: {e}")
+        return False
+
+    def get_pool_health(self) -> Dict[str, Any]:
+        """
+        Return SQLAlchemy QueuePool health snapshot.
+        Safe to call from UI/service layer for diagnostics.
+        """
+        if not self._engine:
+            return {
+                "pool_available": False,
+                "is_connected": bool(self.is_connected),
+                "pool_size": 0,
+                "checked_in": 0,
+                "checked_out": 0,
+                "overflow": 0,
+                "max_overflow": 0,
+                "capacity": 0,
+                "utilization_pct": 0.0,
+                "queue_depth_estimate": 0,
+                "is_exhausted": False,
+                "status": "no_engine",
+            }
+
+        try:
+            pool = self._engine.pool
+            size = int(pool.size()) if callable(getattr(pool, "size", None)) else 0
+            checked_in = int(pool.checkedin()) if callable(getattr(pool, "checkedin", None)) else 0
+            checked_out = int(pool.checkedout()) if callable(getattr(pool, "checkedout", None)) else 0
+            overflow = int(pool.overflow()) if callable(getattr(pool, "overflow", None)) else 0
+            max_overflow = int(getattr(pool, "_max_overflow", 0) or 0)
+            capacity = max(0, size + max_overflow)
+            queue_depth_estimate = max(0, checked_out - size)
+            utilization_pct = round((checked_out / max(1, capacity)) * 100.0, 2) if capacity > 0 else 0.0
+            is_exhausted = capacity > 0 and checked_out >= capacity
+            status_text = ""
+            status_fn = getattr(pool, "status", None)
+            if callable(status_fn):
+                try:
+                    status_text = str(status_fn())
+                except Exception:
+                    status_text = ""
+
+            return {
+                "pool_available": True,
+                "is_connected": bool(self.is_connected),
+                "pool_size": size,
+                "checked_in": checked_in,
+                "checked_out": checked_out,
+                "overflow": overflow,
+                "max_overflow": max_overflow,
+                "capacity": capacity,
+                "utilization_pct": utilization_pct,
+                "queue_depth_estimate": queue_depth_estimate,
+                "is_exhausted": is_exhausted,
+                "status": status_text,
+            }
+        except Exception as e:
+            logger.debug(f"Failed to collect pool health: {e}")
+            return {
+                "pool_available": False,
+                "is_connected": bool(self.is_connected),
+                "pool_size": 0,
+                "checked_in": 0,
+                "checked_out": 0,
+                "overflow": 0,
+                "max_overflow": 0,
+                "capacity": 0,
+                "utilization_pct": 0.0,
+                "queue_depth_estimate": 0,
+                "is_exhausted": False,
+                "status": "error",
+            }
     
     def execute_query(
         self, 
@@ -275,44 +417,63 @@ class DatabaseConnection:
         
         try:
             with self._engine.connect() as conn:
-                # Set query timeout
-                conn.execute(text(f"SET LOCK_TIMEOUT {timeout * 1000}"))
+                raw_conn = conn.connection
+                self._set_active_dbapi_connection(raw_conn)
+                try:
+                    # Apply actual statement execution timeout (pyodbc) when available.
+                    self._apply_query_timeout(raw_conn, timeout)
 
-                # Use raw cursor for multi-statement batches (e.g., temp tables)
-                requires_raw = ("#ErrorLog" in query) or ("xp_readerrorlog" in query)
-                if requires_raw and not params:
-                    raw_conn = conn.connection
-                    cursor = raw_conn.cursor()
-                    cursor.execute("SET NOCOUNT ON")
-                    cursor.execute(query)
+                    # Set query timeout
+                    conn.execute(text(f"SET LOCK_TIMEOUT {timeout * 1000}"))
 
-                    # Advance to the first result set that returns rows
-                    while cursor.description is None and cursor.nextset():
-                        pass
+                    # Use raw cursor for multi-statement batches (e.g., temp tables)
+                    requires_raw = ("#ErrorLog" in query) or ("xp_readerrorlog" in query)
+                    if requires_raw and not params:
+                        cursor = raw_conn.cursor()
+                        try:
+                            cursor.timeout = int(timeout)
+                        except Exception:
+                            pass
+                        cursor.execute("SET NOCOUNT ON")
+                        cursor.execute(query)
 
-                    if cursor.description:
-                        columns = [col[0] for col in cursor.description]
-                        rows = cursor.fetchall()
+                        # Advance to the first result set that returns rows
+                        while cursor.description is None and cursor.nextset():
+                            pass
+
+                        if cursor.description:
+                            columns = [col[0] for col in cursor.description]
+                            rows = cursor.fetchall()
+                            return [dict(zip(columns, row)) for row in rows]
+                        return []
+                    
+                    # Execute query
+                    if params:
+                        result = conn.execute(text(query), params)
+                    else:
+                        result = conn.execute(text(query))
+                    
+                    # Fetch results
+                    if result.returns_rows:
+                        columns = result.keys()
+                        rows = result.fetchall()
                         return [dict(zip(columns, row)) for row in rows]
+                    
                     return []
+                finally:
+                    self._clear_active_dbapi_connection()
                 
-                # Execute query
-                if params:
-                    result = conn.execute(text(query), params)
-                else:
-                    result = conn.execute(text(query))
-                
-                # Fetch results
-                if result.returns_rows:
-                    columns = result.keys()
-                    rows = result.fetchall()
-                    return [dict(zip(columns, row)) for row in rows]
-                
-                return []
-                
-        except pyodbc.OperationalError as e:
-            if "timeout" in str(e).lower():
+        except (pyodbc.OperationalError, SAOperationalError) as e:
+            msg_parts = [str(e).lower()]
+            orig = getattr(e, "orig", None)
+            if orig is not None:
+                msg_parts.append(str(orig).lower())
+            msg = " ".join(msg_parts)
+
+            # pyodbc timeouts commonly surface as HYT00/HYT01 or include "timeout" in the message.
+            if ("timeout" in msg) or ("hyt00" in msg) or ("hyt01" in msg):
                 raise QueryTimeoutError(f"Query timed out after {timeout}s", query=query)
+
             raise QueryExecutionError(f"Query failed: {e}", query=query)
         except Exception as e:
             raise QueryExecutionError(f"Query execution error: {e}", query=query)
@@ -429,6 +590,12 @@ class ConnectionManager(QObject):
             if self._active_connection_id == profile_id:
                 self._active_connection_id = None
                 self.connection_changed.emit(False, "", "")
+            if not self._connections:
+                try:
+                    from app.services.query_stats_service import QueryStatsService
+                    QueryStatsService.stop_background_refresh()
+                except Exception:
+                    pass
     
     def disconnect_all(self) -> None:
         """Disconnect all connections"""
@@ -437,6 +604,11 @@ class ConnectionManager(QObject):
         self._connections.clear()
         self._active_connection_id = None
         self.connection_changed.emit(False, "", "")
+        try:
+            from app.services.query_stats_service import QueryStatsService
+            QueryStatsService.stop_background_refresh()
+        except Exception:
+            pass
     
     def set_active(self, profile_id: str) -> bool:
         """Set the active connection"""

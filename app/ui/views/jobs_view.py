@@ -237,20 +237,6 @@ class JobsView(BaseView):
         title_layout = QHBoxLayout(title_container)
         title_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Left side - title
-        title_left = QVBoxLayout()
-        title_left.setSpacing(8)
-        
-        title = QLabel("⚙️ SQL Agent Jobs")
-        title.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; background: transparent;")
-        title.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
-        title_left.addWidget(title)
-        
-        subtitle = QLabel("Monitor and manage SQL Server Agent jobs")
-        subtitle.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 14px; background: transparent;")
-        title_left.addWidget(subtitle)
-        
-        title_layout.addLayout(title_left)
         title_layout.addStretch()
         
         # Refresh button

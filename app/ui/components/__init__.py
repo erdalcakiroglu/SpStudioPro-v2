@@ -15,6 +15,15 @@ from app.ui.components.plan_viewer import (
     OperatorDetailPanel,
     MissingIndexPanel,
 )
+from app.ui.components.modern_combobox import (
+    ModernComboBox,
+    MetricComboBox,
+    SearchableComboBox,
+    GroupedComboBox,
+    IconComboBox,
+    CompactComboBox,
+    PillComboBox,
+)
 
 __all__ = [
     "Sidebar",
@@ -28,4 +37,11 @@ __all__ = [
     "PlanTreeWidget",
     "OperatorDetailPanel",
     "MissingIndexPanel",
+    "ModernComboBox",
+    "MetricComboBox",
+    "SearchableComboBox",
+    "GroupedComboBox",
+    "IconComboBox",
+    "CompactComboBox",
+    "PillComboBox",
 ]

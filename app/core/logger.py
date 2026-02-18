@@ -6,7 +6,7 @@ import sys
 import logging
 from pathlib import Path
 from typing import Optional
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
 
 from app.core.constants import APP_NAME, LOG_FILE
@@ -73,6 +73,7 @@ class SQLPerfAILogger:
         file_enabled: bool = True,
         max_file_size_mb: int = 10,
         backup_count: int = 5,
+        retention_days: int = 7,
         console_colors: bool = True,
     ) -> logging.Logger:
         """
@@ -84,6 +85,7 @@ class SQLPerfAILogger:
             file_enabled: Enable file logging
             max_file_size_mb: Max size of each log file in MB
             backup_count: Number of backup files to keep
+            retention_days: Number of days to keep daily rotated logs
             console_colors: Use colored output in console
         
         Returns:
@@ -124,12 +126,15 @@ class SQLPerfAILogger:
             
             log_file = log_dir / LOG_FILE
             
-            file_handler = RotatingFileHandler(
+            # Daily rotation with day-based retention for production troubleshooting.
+            file_handler = TimedRotatingFileHandler(
                 log_file,
-                maxBytes=max_file_size_mb * 1024 * 1024,
-                backupCount=backup_count,
+                when='midnight',
+                interval=1,
+                backupCount=max(1, int(retention_days or backup_count)),
                 encoding='utf-8'
             )
+            file_handler.suffix = "%Y-%m-%d"
             file_handler.setLevel(logging.DEBUG)  # File gets all levels
             
             file_format = "%(asctime)s | %(levelname)-8s | %(name)s | %(filename)s:%(lineno)d | %(message)s"
@@ -168,6 +173,7 @@ def setup_logging(
     file_enabled: bool = True,
     max_file_size_mb: int = 10,
     backup_count: int = 5,
+    retention_days: int = 7,
 ) -> logging.Logger:
     """
     Setup application logging
@@ -182,6 +188,7 @@ def setup_logging(
         file_enabled=file_enabled,
         max_file_size_mb=max_file_size_mb,
         backup_count=backup_count,
+        retention_days=retention_days,
     )
 
 

@@ -1,6 +1,6 @@
 """
 Internationalization (i18n) System - Multi-language support for SQL Perf AI
-Supports: English (en), Turkish (tr), German (de)
+Runtime language is driven by Settings.ui.language.
 """
 
 import json
@@ -22,9 +22,9 @@ class TranslationManager:
     Usage:
         from app.core.i18n import tr, set_language
         
-        set_language(Language.TURKISH)
-        print(tr("dashboard.title"))  # "Gösterge Paneli"
-        print(tr("common.save"))      # "Kaydet"
+        set_language(Language.ENGLISH)
+        print(tr("dashboard.title"))  # "Dashboard"
+        print(tr("common.save"))      # "Save"
     """
     
     _instance: Optional['TranslationManager'] = None
@@ -207,7 +207,7 @@ def reload_translations() -> None:
 LANGUAGE_NAMES = {
     Language.ENGLISH: "English",
     Language.TURKISH: "Türkçe",
-    Language.GERMAN: "Deutsch"
+    Language.GERMAN: "Deutsch",
 }
 
 

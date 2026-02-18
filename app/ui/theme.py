@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from enum import Enum
 
-from PyQt6.QtWidgets import QApplication, QWidget, QFrame, QVBoxLayout, QLabel
+from PyQt6.QtWidgets import QApplication, QWidget, QFrame, QVBoxLayout, QLabel, QComboBox, QListView
 from PyQt6.QtGui import QPalette, QColor
 from PyQt6.QtCore import QObject, pyqtSignal, Qt
 
@@ -103,215 +103,102 @@ class Theme:
     FONT_LG = "13px"
     FONT_XL = "14px"
     FONT_2XL = "16px"
-    
+
     @classmethod
-    def btn_primary(cls, size: str = "md") -> str:
-        """Primary buton - Ana aksiyon (Teal renk).
-        Kullanım: Kaydet, Bağlan, Ana işlem butonları
-        """
+    def btn_default(cls, size: str = "md") -> str:
+        """Default button style (Query Statistics > Clear Selection ile aynı)."""
         sizes = {
-            "sm": ("4px 10px", cls.FONT_SM, "6px"),
-            "md": ("6px 14px", cls.FONT_BASE, "8px"),
-            "lg": ("8px 20px", cls.FONT_LG, "8px"),
+            "sm": ("4px 10px", "11px", "6px"),
+            "md": ("6px 12px", "11px", "6px"),
+            "lg": ("8px 16px", "12px", "8px"),
         }
         padding, font_size, radius = sizes.get(size, sizes["md"])
         return f"""
             QPushButton {{
-                background-color: {Colors.PRIMARY};
-                color: #ffffff;
-                border: none;
+                background-color: {Colors.SURFACE};
+                color: {Colors.TEXT_SECONDARY};
+                border: 1px solid {Colors.BORDER};
                 border-radius: {radius};
                 padding: {padding};
                 font-size: {font_size};
                 font-weight: 600;
             }}
             QPushButton:hover {{
-                background-color: {Colors.PRIMARY_HOVER};
+                color: {Colors.PRIMARY};
+                border: 1px solid {Colors.PRIMARY};
+                background-color: #f8fafc;
             }}
             QPushButton:pressed {{
-                background-color: {Colors.PRIMARY_PRESSED};
+                background-color: #eef2ff;
             }}
             QPushButton:disabled {{
-                background-color: {Colors.BORDER_DARK};
                 color: {Colors.TEXT_MUTED};
+                background-color: #f8fafc;
+                border: 1px solid {Colors.BORDER};
             }}
         """
+
+    @classmethod
+    def btn_primary(cls, size: str = "md") -> str:
+        """Primary buton - Ana aksiyon (Teal renk).
+        Kullanım: Kaydet, Bağlan, Ana işlem butonları
+        """
+        return cls.btn_default(size=size)
     
     @classmethod
     def btn_secondary(cls, size: str = "md") -> str:
         """Secondary buton - İkincil aksiyon (Mor/Indigo renk).
         Kullanım: Run Audit, Refresh, Analyze gibi aksiyonlar
         """
-        sizes = {
-            "sm": ("4px 10px", cls.FONT_SM, "6px"),
-            "md": ("6px 14px", cls.FONT_BASE, "8px"),
-            "lg": ("8px 20px", cls.FONT_LG, "8px"),
-        }
-        padding, font_size, radius = sizes.get(size, sizes["md"])
-        return f"""
-            QPushButton {{
-                background-color: {Colors.SECONDARY};
-                color: #ffffff;
-                border: none;
-                border-radius: {radius};
-                padding: {padding};
-                font-size: {font_size};
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.SECONDARY_HOVER};
-            }}
-            QPushButton:pressed {{
-                background-color: {Colors.SECONDARY_PRESSED};
-            }}
-            QPushButton:disabled {{
-                background-color: {Colors.BORDER_DARK};
-                color: {Colors.TEXT_MUTED};
-            }}
-        """
+        return cls.btn_default(size=size)
     
     @classmethod
     def btn_danger(cls, size: str = "md") -> str:
         """Danger buton - Tehlikeli işlemler (Kırmızı).
         Kullanım: Sil, Kill Session, Remove
         """
-        sizes = {
-            "sm": ("4px 10px", cls.FONT_SM, "6px"),
-            "md": ("6px 14px", cls.FONT_BASE, "8px"),
-            "lg": ("8px 20px", cls.FONT_LG, "8px"),
-        }
-        padding, font_size, radius = sizes.get(size, sizes["md"])
-        return f"""
-            QPushButton {{
-                background-color: {Colors.DANGER};
-                color: #ffffff;
-                border: none;
-                border-radius: {radius};
-                padding: {padding};
-                font-size: {font_size};
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.DANGER_HOVER};
-            }}
-            QPushButton:pressed {{
-                background-color: {Colors.DANGER_PRESSED};
-            }}
-        """
+        return cls.btn_default(size=size)
     
     @classmethod
     def btn_ghost(cls, size: str = "md") -> str:
         """Ghost buton - Hafif görünüm, arka plan gri.
         Kullanım: Geri, İptal, Copy Script gibi düşük öncelikli
         """
-        sizes = {
-            "sm": ("4px 10px", cls.FONT_SM, "6px"),
-            "md": ("6px 14px", cls.FONT_BASE, "6px"),
-            "lg": ("8px 20px", cls.FONT_LG, "8px"),
-        }
-        padding, font_size, radius = sizes.get(size, sizes["md"])
-        return f"""
-            QPushButton {{
-                background-color: #f3f4f6;
-                color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: {radius};
-                padding: {padding};
-                font-size: {font_size};
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.BORDER};
-                color: {Colors.TEXT_PRIMARY};
-                border-color: {Colors.BORDER_DARK};
-            }}
-            QPushButton:pressed {{
-                background-color: {Colors.BORDER_DARK};
-            }}
-        """
+        return cls.btn_default(size=size)
     
     @classmethod
     def btn_outline(cls, color: str = "primary", size: str = "md") -> str:
         """Outline buton - Sadece çerçeveli, şeffaf arka plan.
         Colors: primary, secondary, danger
         """
-        colors = {
-            "primary": (Colors.PRIMARY, Colors.PRIMARY_HOVER, Colors.PRIMARY_LIGHT),
-            "secondary": (Colors.SECONDARY, Colors.SECONDARY_HOVER, Colors.SECONDARY_LIGHT),
-            "danger": (Colors.DANGER, Colors.DANGER_HOVER, Colors.DANGER_LIGHT),
-        }
-        sizes = {
-            "sm": ("4px 10px", cls.FONT_SM, "6px"),
-            "md": ("6px 14px", cls.FONT_BASE, "6px"),
-            "lg": ("8px 20px", cls.FONT_LG, "8px"),
-        }
-        main_color, hover_color, light_bg = colors.get(color, colors["primary"])
-        padding, font_size, radius = sizes.get(size, sizes["md"])
-        return f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {main_color};
-                border: 1px solid {main_color};
-                border-radius: {radius};
-                padding: {padding};
-                font-size: {font_size};
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: {light_bg};
-                border-color: {hover_color};
-                color: {hover_color};
-            }}
-            QPushButton:pressed {{
-                background-color: {main_color};
-                color: #ffffff;
-            }}
-        """
+        _ = color
+        return cls.btn_default(size=size)
     
     @classmethod
     def btn_toggle(cls) -> str:
         """Toggle buton - Açık/Kapalı durumlu (checkable).
         Kullanım: Auto-Refresh ON/OFF
         """
-        return f"""
-            QPushButton {{
-                background-color: {Colors.SECONDARY};
-                color: #ffffff;
-                border: none;
-                border-radius: 8px;
-                padding: 6px 14px;
-                font-size: {cls.FONT_BASE};
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.SECONDARY_HOVER};
-            }}
-            QPushButton:checked {{
-                background-color: {Colors.SECONDARY};
-            }}
-            QPushButton:!checked {{
-                background-color: {Colors.TEXT_MUTED};
-            }}
-        """
+        return cls.btn_default(size="md")
     
     @classmethod
     def btn_small_action(cls) -> str:
         """Küçük aksiyon butonu - Test, Edit, Delete"""
-        return f"""
-            QPushButton {{
-                background-color: #f3f4f6;
-                color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: {cls.FONT_SM};
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.BORDER};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-        """
+        return cls.btn_default(size="sm")
+
+    @classmethod
+    def style_pushbuttons_in_widget(cls, root: QWidget) -> None:
+        """Apply centralized pushbutton styling recursively inside a widget tree."""
+        if root is None:
+            return
+
+        from PyQt6.QtWidgets import QPushButton
+
+        if isinstance(root, QPushButton):
+            root.setStyleSheet(cls.btn_default())
+
+        for btn in root.findChildren(QPushButton):
+            btn.setStyleSheet(cls.btn_default())
     
     @classmethod
     def card_style(cls) -> str:
@@ -345,6 +232,35 @@ class Theme:
             }}
         """
     
+    @classmethod
+    def tab_widget_style(cls) -> str:
+        """TabWidget stili (Settings > AI Prompt Rules ile uyumlu)."""
+        return f"""
+            QTabWidget::pane {{
+                background-color: {Colors.SURFACE};
+                border: none;
+                border-top: 1px solid {Colors.BORDER};
+            }}
+            QTabBar::tab {{
+                background-color: transparent;
+                border: none;
+                border-bottom: 3px solid transparent;
+                padding: 10px 16px;
+                color: #000000;
+                font-weight: 700;
+                font-size: 12px;
+            }}
+            QTabBar::tab:selected {{
+                color: #000000;
+                border-bottom-color: {Colors.PRIMARY};
+                font-weight: 700;
+            }}
+            QTabBar::tab:hover:!selected {{
+                color: #000000;
+                background-color: rgba(14, 138, 157, 0.06);
+            }}
+        """
+
     @classmethod
     def table_style(cls) -> str:
         """Modern tablo stili"""
@@ -437,22 +353,272 @@ class Theme:
                 selection-color: {Colors.TEXT_PRIMARY};
                 color: {Colors.TEXT_PRIMARY};
                 padding: 4px;
+                outline: none;
             }}
             QComboBox QAbstractItemView::item {{
-                padding: 6px 10px;
+                padding: 3px 8px;
+                min-height: 14px;
                 color: {Colors.TEXT_PRIMARY};
+                border: none;
             }}
             QComboBox QAbstractItemView::item:hover {{
                 background-color: {Colors.PRIMARY_LIGHT};
                 color: {Colors.TEXT_PRIMARY};
+                border: none;
             }}
             QComboBox QAbstractItemView::item:selected {{
                 background-color: {Colors.PRIMARY};
                 color: #ffffff;
+                border: none;
+            }}
+            QComboBox QAbstractItemView::item:focus {{
+                outline: none;
+                border: none;
+            }}
+            QComboBox QAbstractItemView QScrollBar:vertical {{
+                border: none;
+                background-color: {Colors.BORDER_LIGHT};
+                width: 8px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
+            QComboBox QAbstractItemView QScrollBar::handle:vertical {{
+                background-color: {Colors.BORDER_DARK};
+                border-radius: 4px;
+                min-height: 20px;
+            }}
+            QComboBox QAbstractItemView QScrollBar::handle:vertical:hover {{
+                background-color: {Colors.TEXT_MUTED};
+            }}
+            QComboBox QAbstractItemView QScrollBar::add-line:vertical,
+            QComboBox QAbstractItemView QScrollBar::sub-line:vertical,
+            QComboBox QAbstractItemView QScrollBar::add-page:vertical,
+            QComboBox QAbstractItemView QScrollBar::sub-page:vertical {{
+                background: transparent;
+                height: 0px;
+            }}
+            QComboBox QAbstractItemView QScrollBar:horizontal {{
+                border: none;
+                background-color: {Colors.BORDER_LIGHT};
+                height: 8px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
+            QComboBox QAbstractItemView QScrollBar::handle:horizontal {{
+                background-color: {Colors.BORDER_DARK};
+                border-radius: 4px;
+                min-width: 20px;
+            }}
+            QComboBox QAbstractItemView QScrollBar::handle:horizontal:hover {{
+                background-color: {Colors.TEXT_MUTED};
+            }}
+            QComboBox QAbstractItemView QScrollBar::add-line:horizontal,
+            QComboBox QAbstractItemView QScrollBar::sub-line:horizontal,
+            QComboBox QAbstractItemView QScrollBar::add-page:horizontal,
+            QComboBox QAbstractItemView QScrollBar::sub-page:horizontal {{
+                background: transparent;
+                width: 0px;
             }}
             QComboBox:disabled {{
                 background-color: #f3f4f6;
                 color: {Colors.TEXT_MUTED};
+            }}
+        """
+
+    @classmethod
+    def combobox_popup_view_style(cls) -> str:
+        """ComboBox popup view stili (combo.view().setStyleSheet için)."""
+        return f"""
+            QAbstractItemView {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                selection-background-color: {Colors.PRIMARY_LIGHT};
+                selection-color: {Colors.TEXT_PRIMARY};
+                color: {Colors.TEXT_PRIMARY};
+                padding: 4px;
+                outline: none;
+            }}
+            QAbstractItemView::item {{
+                padding: 3px 8px;
+                min-height: 14px;
+                color: {Colors.TEXT_PRIMARY};
+                border: none;
+            }}
+            QAbstractItemView::item:hover {{
+                background-color: {Colors.PRIMARY_LIGHT};
+                color: {Colors.TEXT_PRIMARY};
+                border: none;
+            }}
+            QAbstractItemView::item:selected {{
+                background-color: {Colors.PRIMARY};
+                color: #ffffff;
+                border: none;
+            }}
+            QAbstractItemView::item:focus {{
+                outline: none;
+                border: none;
+            }}
+            QAbstractItemView QScrollBar:vertical {{
+                border: none;
+                background-color: {Colors.BORDER_LIGHT};
+                width: 8px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
+            QAbstractItemView QScrollBar::handle:vertical {{
+                background-color: {Colors.BORDER_DARK};
+                border-radius: 4px;
+                min-height: 20px;
+            }}
+            QAbstractItemView QScrollBar::handle:vertical:hover {{
+                background-color: {Colors.TEXT_MUTED};
+            }}
+            QAbstractItemView QScrollBar::add-line:vertical,
+            QAbstractItemView QScrollBar::sub-line:vertical,
+            QAbstractItemView QScrollBar::add-page:vertical,
+            QAbstractItemView QScrollBar::sub-page:vertical {{
+                background: transparent;
+                height: 0px;
+            }}
+            QAbstractItemView QScrollBar:horizontal {{
+                border: none;
+                background-color: {Colors.BORDER_LIGHT};
+                height: 8px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
+            QAbstractItemView QScrollBar::handle:horizontal {{
+                background-color: {Colors.BORDER_DARK};
+                border-radius: 4px;
+                min-width: 20px;
+            }}
+            QAbstractItemView QScrollBar::handle:horizontal:hover {{
+                background-color: {Colors.TEXT_MUTED};
+            }}
+            QAbstractItemView QScrollBar::add-line:horizontal,
+            QAbstractItemView QScrollBar::sub-line:horizontal,
+            QAbstractItemView QScrollBar::add-page:horizontal,
+            QAbstractItemView QScrollBar::sub-page:horizontal {{
+                background: transparent;
+                width: 0px;
+            }}
+        """
+
+    @classmethod
+    def style_combobox_instance(cls, combo: QComboBox) -> None:
+        """Apply centralized combo + popup styling to a single combobox."""
+        if combo is None:
+            return
+
+        combo.setStyleSheet(cls.combobox_style())
+
+        popup_view = combo.view()
+        if not isinstance(popup_view, QListView):
+            popup_view = QListView(combo)
+            combo.setView(popup_view)
+
+        popup_view.setStyleSheet(cls.combobox_popup_view_style())
+        popup_view.setUniformItemSizes(False)
+        popup_view.setAlternatingRowColors(False)
+
+    @classmethod
+    def style_comboboxes_in_widget(cls, root: QWidget) -> None:
+        """Apply centralized combobox styling recursively inside a widget tree."""
+        if root is None:
+            return
+
+        if isinstance(root, QComboBox):
+            cls.style_combobox_instance(root)
+
+        for combo in root.findChildren(QComboBox):
+            cls.style_combobox_instance(combo)
+
+    @classmethod
+    def listbox_style(cls) -> str:
+        """ListWidget stili - Object Explorer 'Objects' ile uyumlu."""
+        return f"""
+            QListWidget {{
+                background-color: {Colors.SURFACE};
+                border: none;
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 11px;
+                outline: none;
+            }}
+            QListWidget:focus {{
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 6px 8px;
+                border-radius: 4px;
+                border: none;
+                margin: 0px;
+            }}
+            QListWidget::item:hover {{
+                background-color: {Colors.PRIMARY}10;
+                border: none;
+            }}
+            QListWidget::item:selected {{
+                background-color: {Colors.PRIMARY}20;
+                color: {Colors.PRIMARY};
+                border: none;
+                outline: none;
+            }}
+            QListWidget::item:selected:active {{
+                background-color: {Colors.PRIMARY}20;
+                color: {Colors.PRIMARY};
+                border: none;
+                outline: none;
+            }}
+            QListWidget::item:selected:!active {{
+                background-color: {Colors.PRIMARY}18;
+                color: {Colors.PRIMARY};
+                border: none;
+                outline: none;
+            }}
+            QListWidget QScrollBar:vertical {{
+                border: none;
+                background-color: {Colors.BORDER_LIGHT};
+                width: 8px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
+            QListWidget QScrollBar::handle:vertical {{
+                background-color: {Colors.BORDER_DARK};
+                border-radius: 4px;
+                min-height: 20px;
+            }}
+            QListWidget QScrollBar::handle:vertical:hover {{
+                background-color: {Colors.TEXT_MUTED};
+            }}
+            QListWidget QScrollBar::add-line:vertical,
+            QListWidget QScrollBar::sub-line:vertical,
+            QListWidget QScrollBar::add-page:vertical,
+            QListWidget QScrollBar::sub-page:vertical {{
+                background: transparent;
+                height: 0px;
+            }}
+            QListWidget QScrollBar:horizontal {{
+                border: none;
+                background-color: {Colors.BORDER_LIGHT};
+                height: 8px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
+            QListWidget QScrollBar::handle:horizontal {{
+                background-color: {Colors.BORDER_DARK};
+                border-radius: 4px;
+                min-width: 20px;
+            }}
+            QListWidget QScrollBar::handle:horizontal:hover {{
+                background-color: {Colors.TEXT_MUTED};
+            }}
+            QListWidget QScrollBar::add-line:horizontal,
+            QListWidget QScrollBar::sub-line:horizontal,
+            QListWidget QScrollBar::add-page:horizontal,
+            QListWidget QScrollBar::sub-page:horizontal {{
+                background: transparent;
+                width: 0px;
             }}
         """
     
@@ -681,17 +847,19 @@ QLineEdit:disabled {{
 
 /* === Buttons === */
 QPushButton {{
-    background-color: {c['bg_tertiary']};
+    background-color: {c['bg_secondary']};
+    color: {c['text_secondary']};
     border: 1px solid {c['border_primary']};
     border-radius: 6px;
-    padding: 8px 16px;
-    color: {c['text_primary']};
-    font-weight: 500;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
 }}
 
 QPushButton:hover {{
+    color: {c['accent_primary']};
+    border-color: {c['accent_primary']};
     background-color: {c['bg_hover']};
-    border-color: {c['border_focus']};
 }}
 
 QPushButton:pressed {{
@@ -699,19 +867,22 @@ QPushButton:pressed {{
 }}
 
 QPushButton:disabled {{
-    background-color: {c['bg_tertiary']};
+    background-color: {c['bg_secondary']};
     color: {c['text_disabled']};
     border-color: {c['border_secondary']};
 }}
 
 QPushButton#primaryButton {{
-    background-color: {c['accent_primary']};
-    border: none;
-    color: white;
+    background-color: {c['bg_secondary']};
+    border: 1px solid {c['border_primary']};
+    color: {c['text_secondary']};
+    font-weight: 600;
 }}
 
 QPushButton#primaryButton:hover {{
-    background-color: {c['accent_hover']};
+    color: {c['accent_primary']};
+    border-color: {c['accent_primary']};
+    background-color: {c['bg_hover']};
 }}
 
 /* === Tables === */
@@ -885,21 +1056,83 @@ QComboBox QAbstractItemView {{
     selection-color: #ffffff;
     color: {c['text_primary']};
     padding: 4px;
+    outline: none;
 }}
 
 QComboBox QAbstractItemView::item {{
     color: {c['text_primary']};
-    padding: 6px 10px;
+    padding: 3px 8px;
+    min-height: 14px;
+    border: none;
 }}
 
 QComboBox QAbstractItemView::item:hover {{
     background-color: {c['bg_hover']};
     color: {c['text_primary']};
+    border: none;
 }}
 
 QComboBox QAbstractItemView::item:selected {{
     background-color: {c['bg_selected']};
     color: #ffffff;
+    border: none;
+}}
+
+QComboBox QAbstractItemView::item:focus {{
+    outline: none;
+    border: none;
+}}
+
+QComboBox QAbstractItemView QScrollBar:vertical {{
+    border: none;
+    background-color: {c['bg_tertiary']};
+    width: 8px;
+    border-radius: 4px;
+    margin: 2px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:vertical {{
+    background-color: {c['border_secondary']};
+    border-radius: 4px;
+    min-height: 20px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:vertical:hover {{
+    background-color: {c['text_muted']};
+}}
+
+QComboBox QAbstractItemView QScrollBar::add-line:vertical,
+QComboBox QAbstractItemView QScrollBar::sub-line:vertical,
+QComboBox QAbstractItemView QScrollBar::add-page:vertical,
+QComboBox QAbstractItemView QScrollBar::sub-page:vertical {{
+    background: transparent;
+    height: 0px;
+}}
+
+QComboBox QAbstractItemView QScrollBar:horizontal {{
+    border: none;
+    background-color: {c['bg_tertiary']};
+    height: 8px;
+    border-radius: 4px;
+    margin: 2px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:horizontal {{
+    background-color: {c['border_secondary']};
+    border-radius: 4px;
+    min-width: 20px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:horizontal:hover {{
+    background-color: {c['text_muted']};
+}}
+
+QComboBox QAbstractItemView QScrollBar::add-line:horizontal,
+QComboBox QAbstractItemView QScrollBar::sub-line:horizontal,
+QComboBox QAbstractItemView QScrollBar::add-page:horizontal,
+QComboBox QAbstractItemView QScrollBar::sub-page:horizontal {{
+    background: transparent;
+    width: 0px;
 }}
 
 QComboBox:disabled {{
@@ -1103,38 +1336,42 @@ QLineEdit#SearchField:focus {{
 
 /* === Buttons === */
 QPushButton {{
-    background-color: {c['bg_tertiary']};
+    background-color: {c['bg_secondary']};
     border: 1px solid {c['border_primary']};
     border-radius: 6px;
-    padding: 8px 16px;
-    color: {c['text_primary']};
-    font-weight: 500;
+    padding: 6px 12px;
+    color: {c['text_secondary']};
+    font-size: 11px;
+    font-weight: 600;
 }}
 
 QPushButton:hover {{
+    color: {c['accent_primary']};
+    border-color: {c['accent_primary']};
     background-color: {c['bg_hover']};
-    border-color: {c['border_focus']};
 }}
 
 QPushButton:pressed {{
-    background-color: {c['border_primary']};
+    background-color: {c['bg_selected']};
 }}
 
 QPushButton:disabled {{
-    background-color: {c['bg_tertiary']};
+    background-color: {c['bg_secondary']};
     color: {c['text_disabled']};
     border-color: {c['border_secondary']};
 }}
 
 QPushButton#primaryButton, QPushButton#AddConnectionButton {{
-    background-color: {c['accent_primary']};
-    border: none;
-    color: white;
+    background-color: {c['bg_secondary']};
+    border: 1px solid {c['border_primary']};
+    color: {c['text_secondary']};
     font-weight: 600;
 }}
 
 QPushButton#primaryButton:hover, QPushButton#AddConnectionButton:hover {{
-    background-color: {c['accent_hover']};
+    color: {c['accent_primary']};
+    border-color: {c['accent_primary']};
+    background-color: {c['bg_hover']};
 }}
 
 QPushButton#SidebarButton {{
@@ -1344,21 +1581,83 @@ QComboBox QAbstractItemView {{
     selection-color: #ffffff;
     color: {c['text_primary']};
     padding: 4px;
+    outline: none;
 }}
 
 QComboBox QAbstractItemView::item {{
     color: {c['text_primary']};
-    padding: 6px 10px;
+    padding: 3px 8px;
+    min-height: 14px;
+    border: none;
 }}
 
 QComboBox QAbstractItemView::item:hover {{
     background-color: {c['bg_hover']};
     color: {c['text_primary']};
+    border: none;
 }}
 
 QComboBox QAbstractItemView::item:selected {{
     background-color: {c['bg_selected']};
     color: #ffffff;
+    border: none;
+}}
+
+QComboBox QAbstractItemView::item:focus {{
+    outline: none;
+    border: none;
+}}
+
+QComboBox QAbstractItemView QScrollBar:vertical {{
+    border: none;
+    background-color: {c['bg_tertiary']};
+    width: 8px;
+    border-radius: 4px;
+    margin: 2px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:vertical {{
+    background-color: {c['border_secondary']};
+    border-radius: 4px;
+    min-height: 20px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:vertical:hover {{
+    background-color: {c['text_muted']};
+}}
+
+QComboBox QAbstractItemView QScrollBar::add-line:vertical,
+QComboBox QAbstractItemView QScrollBar::sub-line:vertical,
+QComboBox QAbstractItemView QScrollBar::add-page:vertical,
+QComboBox QAbstractItemView QScrollBar::sub-page:vertical {{
+    background: transparent;
+    height: 0px;
+}}
+
+QComboBox QAbstractItemView QScrollBar:horizontal {{
+    border: none;
+    background-color: {c['bg_tertiary']};
+    height: 8px;
+    border-radius: 4px;
+    margin: 2px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:horizontal {{
+    background-color: {c['border_secondary']};
+    border-radius: 4px;
+    min-width: 20px;
+}}
+
+QComboBox QAbstractItemView QScrollBar::handle:horizontal:hover {{
+    background-color: {c['text_muted']};
+}}
+
+QComboBox QAbstractItemView QScrollBar::add-line:horizontal,
+QComboBox QAbstractItemView QScrollBar::sub-line:horizontal,
+QComboBox QAbstractItemView QScrollBar::add-page:horizontal,
+QComboBox QAbstractItemView QScrollBar::sub-page:horizontal {{
+    background: transparent;
+    width: 0px;
 }}
 
 QComboBox:disabled {{

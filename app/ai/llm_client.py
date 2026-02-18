@@ -139,6 +139,22 @@ class BaseLLMProvider(ABC):
         except Exception:
             pass
 
+    def _get_request_timeout(self) -> int:
+        """Resolve a safe request timeout (seconds) for provider HTTP calls."""
+        try:
+            timeout = int(getattr(self.config, "timeout", 0) or 0)
+        except Exception:
+            timeout = 0
+        if timeout <= 0:
+            timeout = 120
+        return max(10, min(timeout, 600))
+
+    def _get_http_timeout(self) -> httpx.Timeout:
+        """Build httpx timeout with sane connect/read/write defaults."""
+        total = self._get_request_timeout()
+        connect = min(10.0, float(total))
+        return httpx.Timeout(total, connect=connect, read=total, write=total, pool=total)
+
     async def _stream_openai_compatible(
         self,
         url: str,
@@ -152,8 +168,7 @@ class BaseLLMProvider(ABC):
         """
         chunks: List[str] = []
         usage: Dict[str, Any] = {}
-
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=self._get_http_timeout()) as client:
             async with client.stream("POST", url, headers=headers, json=payload) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
@@ -178,6 +193,7 @@ class BaseLLMProvider(ABC):
                     if not isinstance(choices, list) or not choices:
                         continue
                     choice0 = choices[0] if isinstance(choices[0], dict) else {}
+                    finish_reason = choice0.get("finish_reason")
                     delta = choice0.get("delta")
                     piece = ""
                     if isinstance(delta, dict):
@@ -189,6 +205,9 @@ class BaseLLMProvider(ABC):
                     if piece:
                         chunks.append(piece)
                         self._emit_stream_chunk(on_chunk, piece)
+                    # Some OpenAI-compatible APIs omit [DONE] and only set finish_reason.
+                    if finish_reason is not None:
+                        break
 
         return "".join(chunks), usage
 
@@ -278,7 +297,7 @@ class OllamaProvider(BaseLLMProvider):
             payload["system"] = system_prompt
         
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._get_http_timeout()) as client:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
                 data = response.json()
@@ -316,7 +335,7 @@ class OllamaProvider(BaseLLMProvider):
         chunks: List[str] = []
         usage: Dict[str, Any] = {}
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=self._get_http_timeout()) as client:
                 async with client.stream("POST", url, json=payload) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
@@ -332,6 +351,7 @@ class OllamaProvider(BaseLLMProvider):
                             self._emit_stream_chunk(on_chunk, piece)
                         if event.get("done") and isinstance(event, dict):
                             usage = event
+                            break
             text = "".join(chunks)
             self._log_token_usage(prompt, system_prompt, text, usage=usage)
             return text
@@ -380,7 +400,7 @@ class OpenAIProvider(BaseLLMProvider):
         }
         
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._get_http_timeout()) as client:
                 response = await client.post(
                     f"{self.BASE_URL}/chat/completions",
                     headers={
@@ -468,7 +488,7 @@ class AnthropicProvider(BaseLLMProvider):
             payload["system"] = system_prompt
         
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._get_http_timeout()) as client:
                 response = await client.post(
                     f"{self.BASE_URL}/messages",
                     headers={
@@ -544,7 +564,7 @@ class DeepSeekProvider(BaseLLMProvider):
         }
         
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._get_http_timeout()) as client:
                 response = await client.post(
                     f"{self.BASE_URL}/chat/completions",
                     headers={
@@ -642,7 +662,7 @@ class AzureOpenAIProvider(BaseLLMProvider):
         url = f"{self.config.endpoint}/openai/deployments/{deployment}/chat/completions?api-version=2024-02-01"
         
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            async with httpx.AsyncClient(timeout=self._get_http_timeout()) as client:
                 response = await client.post(
                     url,
                     headers={
@@ -793,6 +813,19 @@ class UnifiedLLMClient:
             # Fallback: ilk provider'ı kullan
             provider = next(iter(self._providers.values()))
         return provider
+
+    @property
+    def active_provider_type(self) -> Optional[LLMProviderType]:
+        """Aktif provider tipini döndür."""
+        provider = self.active_provider
+        if not provider:
+            return None
+        return getattr(getattr(provider, "config", None), "provider_type", None)
+
+    def is_active_provider_local(self) -> bool:
+        """True if active provider runs locally (Ollama)."""
+        provider_type = self.active_provider_type
+        return provider_type == LLMProviderType.OLLAMA
     
     def get_provider(self, provider_id: str) -> Optional[BaseLLMProvider]:
         """Belirli bir provider'ı döndür"""

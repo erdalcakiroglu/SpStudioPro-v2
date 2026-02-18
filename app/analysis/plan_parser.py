@@ -14,9 +14,13 @@ Referans: https://docs.microsoft.com/en-us/sql/relational-databases/showplan-log
 
 import xml.etree.ElementTree as ET
 from typing import Optional, List, Dict, Any, Tuple
+import copy
+import hashlib
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
+from threading import Lock
 
 from app.core.logger import get_logger
 
@@ -372,8 +376,43 @@ class PlanParser:
             print(f"{op.display_name}: {op.cost_percent}%")
     """
     
+    _PARSED_PLAN_CACHE_MAX = 50
+    _PARSED_PLAN_CACHE: "OrderedDict[str, ExecutionPlan]" = OrderedDict()
+    _CACHE_LOCK = Lock()
+
     def __init__(self):
         self._total_cost = 0.0
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        with cls._CACHE_LOCK:
+            cls._PARSED_PLAN_CACHE.clear()
+
+    @classmethod
+    def cache_info(cls) -> Dict[str, int]:
+        with cls._CACHE_LOCK:
+            return {"size": len(cls._PARSED_PLAN_CACHE), "max_size": int(cls._PARSED_PLAN_CACHE_MAX)}
+
+    @staticmethod
+    def _make_cache_key(xml_string: str) -> str:
+        return hashlib.sha1(str(xml_string or "").encode("utf-8", errors="ignore")).hexdigest()
+
+    @classmethod
+    def _get_cached_plan(cls, cache_key: str) -> Optional[ExecutionPlan]:
+        with cls._CACHE_LOCK:
+            cached = cls._PARSED_PLAN_CACHE.get(cache_key)
+            if cached is None:
+                return None
+            cls._PARSED_PLAN_CACHE.move_to_end(cache_key)
+            return copy.deepcopy(cached)
+
+    @classmethod
+    def _set_cached_plan(cls, cache_key: str, plan: ExecutionPlan) -> None:
+        with cls._CACHE_LOCK:
+            cls._PARSED_PLAN_CACHE[cache_key] = copy.deepcopy(plan)
+            cls._PARSED_PLAN_CACHE.move_to_end(cache_key)
+            while len(cls._PARSED_PLAN_CACHE) > int(cls._PARSED_PLAN_CACHE_MAX):
+                cls._PARSED_PLAN_CACHE.popitem(last=False)
     
     def parse(self, xml_string: str) -> Optional[ExecutionPlan]:
         """
@@ -388,6 +427,12 @@ class PlanParser:
         if not xml_string or not xml_string.strip():
             logger.warning("Empty plan XML")
             return None
+
+        cache_key = self._make_cache_key(xml_string)
+        cached_plan = self._get_cached_plan(cache_key)
+        if cached_plan is not None:
+            logger.debug("Plan parser cache hit")
+            return cached_plan
         
         try:
             # XML'i parse et
@@ -458,7 +503,7 @@ class PlanParser:
             plan.warnings = self._collect_plan_warnings(plan)
             
             logger.info(f"Parsed plan: {plan.operator_count} operators, cost={plan.total_cost:.4f}")
-            
+            self._set_cached_plan(cache_key, plan)
             return plan
             
         except ET.ParseError as e:

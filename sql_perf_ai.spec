@@ -24,6 +24,7 @@ added_files = [
     # ('locales/*.json', 'locales'),
     # Assets (when we add them)
     # ('assets/icons/*.png', 'assets/icons'),
+    ('prompts', 'prompts'),
 ]
 
 # Hidden imports that PyInstaller might miss
@@ -52,6 +53,8 @@ hidden_imports = [
     'pydantic_settings',
     'pydantic.fields',
     'pydantic_core',
+    'yaml',
+    'yaml._yaml',
 ]
 
 # Modules to exclude (reduce size)

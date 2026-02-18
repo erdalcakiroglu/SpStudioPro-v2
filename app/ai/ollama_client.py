@@ -42,7 +42,7 @@ class GenerationOptions:
     repeat_penalty: float = 1.1       # Tekrar önleme
     num_predict: int = 4096           # Max tokens
     num_ctx: int = 8192               # Context window
-    stop: List[str] = None            # Stop sequences
+    stop: Optional[List[str]] = None  # Stop sequences
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to Ollama options dict"""

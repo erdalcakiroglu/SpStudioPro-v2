@@ -171,6 +171,14 @@ GRANT VIEW DATABASE STATE TO [AppUser];
 GRANT VIEW DEFINITION TO [AppUser];
 ```
 
+Query Statistics module requirements:
+- `VIEW SERVER STATE` is required to load the module.
+- `VIEW DEFINITION` (or equivalent `SELECT` access on `sys.sql_modules`) is required for source code tab.
+- If `VIEW SERVER STATE` is missing, Query Statistics is disabled with a friendly permission warning.
+- If `sys.sql_modules` access is missing, Query Statistics still works but source code view is disabled.
+- Sensitive SQL literals are redacted by default in Query Statistics and execution plan views.
+- Sending unredacted SQL/plan context to cloud AI providers requires explicit per-session opt-in (local Ollama is exempt).
+
 ## License
 
 MIT License - See LICENSE file for details.

@@ -160,6 +160,13 @@ class PlanInsights:
     has_sort_warning: bool = False
     has_hash_spill: bool = False
     has_implicit_conversion: bool = False
+    has_clustered_index_scan: bool = False
+    has_clustered_index_seek: bool = False
+    has_index_scan: bool = False
+    has_index_seek: bool = False
+    has_sort: bool = False
+    primary_access_operator: str = ""
+    physical_ops: List[str] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         """AI prompt için dict'e dönüştür"""
@@ -169,6 +176,8 @@ class PlanInsights:
             "dop": self.degree_of_parallelism,
             "warnings": [w.message for w in self.warnings],
             "expensive_operators": self.expensive_operators,
+            "physical_ops": self.physical_ops,
+            "primary_access_operator": self.primary_access_operator,
             "missing_indexes": [
                 {
                     "table": f"{mi.schema_name}.{mi.table_name}",
@@ -182,6 +191,11 @@ class PlanInsights:
             "has_table_scan": self.has_table_scan,
             "has_key_lookup": self.has_key_lookup,
             "has_implicit_conversion": self.has_implicit_conversion,
+            "has_clustered_index_scan": self.has_clustered_index_scan,
+            "has_clustered_index_seek": self.has_clustered_index_seek,
+            "has_index_scan": self.has_index_scan,
+            "has_index_seek": self.has_index_seek,
+            "has_sort": self.has_sort,
             "row_estimate_issues": any(op.has_bad_estimate for op in self.operators)
         }
     
@@ -333,6 +347,8 @@ class ExecutionPlanAnalyzer:
         for relop in root.findall('.//sp:RelOp', self.NAMESPACES):
             physical_op = relop.get('PhysicalOp', '')
             logical_op = relop.get('LogicalOp', '')
+            if physical_op and physical_op not in insights.physical_ops:
+                insights.physical_ops.append(physical_op)
             
             # Cost info
             estimated_cost = float(relop.get('EstimateCPU', 0)) + float(relop.get('EstimateIO', 0))
@@ -468,6 +484,7 @@ class ExecutionPlanAnalyzer:
     
     def _analyze_operators(self, insights: PlanInsights) -> None:
         """Operatörleri analiz et ve flag'leri ayarla"""
+        access_candidates: List[Tuple[float, str]] = []
         for op in insights.operators:
             # Table scan check
             if op.physical_op == "Table Scan":
@@ -500,6 +517,31 @@ class ExecutionPlanAnalyzer:
                     operator=op.name,
                     recommendation="İstatistikleri güncelleyin veya histogram'ı kontrol edin"
                 ))
+
+            if op.physical_op == "Clustered Index Scan":
+                insights.has_clustered_index_scan = True
+            if op.physical_op == "Clustered Index Seek":
+                insights.has_clustered_index_seek = True
+            if op.physical_op == "Index Scan":
+                insights.has_index_scan = True
+            if op.physical_op == "Index Seek":
+                insights.has_index_seek = True
+            if op.physical_op == "Sort":
+                insights.has_sort = True
+
+            if op.physical_op in (
+                "Table Scan",
+                "Clustered Index Scan",
+                "Clustered Index Seek",
+                "Index Scan",
+                "Index Seek",
+            ):
+                access_candidates.append((float(op.subtree_cost or 0.0), op.physical_op))
+
+        # Primary access operator: the access method with highest estimated subtree cost.
+        if access_candidates:
+            access_candidates.sort(key=lambda x: x[0], reverse=True)
+            insights.primary_access_operator = str(access_candidates[0][1] or "")
 
 
 def analyze_plan(plan_xml: str) -> PlanInsights:

@@ -87,46 +87,9 @@ class AISettings(BaseSettings):
     # Dictionary of configured providers: {provider_id: {config_dict}}
     providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
-    # Prompt rules (user-managed)
-    prompt_rules: dict[str, Any] = Field(default_factory=lambda: {
-        "global_instructions": (
-            "You are a senior MS SQL Server Advisor with 15+ years of experience. "
-            "Be concise, practical, and performance-focused. "
-            "Avoid unnecessary information. "
-            "Provide risk level and priority (P1/P2/P3) for each recommendation. "
-            "When you propose changes, include a short verification step."
-        ),
-        "overrides": {
-            "query_analysis": {
-                "system": (
-                    "{base_system}\n\n"
-                    "Output must be in English. Use clear headings and tables where appropriate."
-                ),
-                "user": "{base_user}",
-            },
-            "sp_optimization": {
-                "system": (
-                    "{base_system}\n\n"
-                    "Focus on execution plans, indexing, and parameter sniffing risks."
-                ),
-                "user": "{base_user}",
-            },
-            "sp_code_only": {
-                "system": (
-                    "{base_system}\n\n"
-                    "Return only SQL code. No markdown."
-                ),
-                "user": "{base_user}",
-            },
-            "index_recommendation": {
-                "system": (
-                    "{base_system}\n\n"
-                    "Prefer covering indexes when appropriate and mention maintenance cost."
-                ),
-                "user": "{base_user}",
-            },
-        },
-    })
+    # Prompt rules are stored in YAML under the repository `prompts/` folder.
+    # (Settings.json should not contain prompt content.)
+    prompt_rules: dict[str, Any] = Field(default_factory=dict)
     
     @field_validator('ollama_host')
     @classmethod
@@ -148,6 +111,7 @@ class UISettings(BaseSettings):
     font_size: int = Field(default=13, ge=10, le=24)
     code_font_size: int = Field(default=12, ge=10, le=24)
     show_line_numbers: bool = Field(default=True)
+    license_accepted: bool = Field(default=False)
     navigation_visibility: dict[str, bool] = Field(default_factory=lambda: {
         "chat": True,
         "dashboard": True,
@@ -159,6 +123,9 @@ class UISettings(BaseSettings):
         "jobs": True,
         "wait_stats": True,
     })
+    # Per-database Query Statistics filter memory.
+    # Key format: connection/database hash, value: serialized filter params.
+    query_stats_filter_memory: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class CacheSettings(BaseSettings):
@@ -177,6 +144,7 @@ class LoggingSettings(BaseSettings):
     file_enabled: bool = Field(default=True)
     max_file_size_mb: int = Field(default=10, ge=1, le=100)
     backup_count: int = Field(default=5, ge=1, le=20)
+    retention_days: int = Field(default=7, ge=1, le=30)
     
     @field_validator('level')
     @classmethod
@@ -186,6 +154,20 @@ class LoggingSettings(BaseSettings):
         if v not in valid_levels:
             v = 'INFO'
         return v
+
+
+class LicenseSettings(BaseSettings):
+    """License/trial settings (online validation)."""
+
+    server_url: str = Field(default="")
+    email: str = Field(default="")
+    token: str = Field(default="")
+    device_id: str = Field(default="")
+    status: str = Field(default="unknown")
+    trial_expires_at: Optional[str] = Field(default=None)
+    license_count: int = Field(default=0, ge=0)
+    allowed_devices: int = Field(default=0, ge=0)
+    last_validated_at: Optional[str] = Field(default=None)
 
 
 class Settings(BaseSettings):
@@ -203,6 +185,7 @@ class Settings(BaseSettings):
     ui: UISettings = Field(default_factory=UISettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    license: LicenseSettings = Field(default_factory=LicenseSettings)
     
     # App paths
     app_dir: Path = Field(default_factory=get_app_dir)
@@ -264,11 +247,21 @@ class Settings(BaseSettings):
             try:
                 with open(settings_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                # Lightweight migration: bump old default AI timeout (120s) to 300s.
+                # This primarily affects AI Tune (Object Explorer) where 120s can be too short.
+                try:
+                    if isinstance(data, dict):
+                        ai = data.get("ai")
+                        if isinstance(ai, dict) and ai.get("timeout") == 120:
+                            ai["timeout"] = 300
+                            data["ai"] = ai
+                except Exception:
+                    pass
                 return cls(**data)
             except Exception:
                 # If loading fails, return defaults
                 pass
-        
+         
         return cls()
 
 
@@ -281,8 +274,7 @@ def get_settings() -> Settings:
     global _settings
     if _settings is None:
         _settings = Settings.load()
-        # Default UI language is English for now.
-        # We keep the enum/translation infra, but clamp runtime language to EN.
+        # Interface language is locked to English for now.
         _settings.ui.language = Language.ENGLISH
         _init_i18n(Language.ENGLISH)
     return _settings
@@ -323,13 +315,13 @@ def update_settings(**kwargs) -> Settings:
             else:
                 setattr(settings, key, value)
     
-    # Clamp language to English for now (other UI languages will be added later).
+    # Interface language is locked to English for now.
     settings.ui.language = Language.ENGLISH
 
     settings.save()
     _settings = settings
     
-    # Keep i18n in sync (English only for now)
+    # Keep i18n in sync
     if settings.ui.language != old_language:
         _init_i18n(Language.ENGLISH)
     

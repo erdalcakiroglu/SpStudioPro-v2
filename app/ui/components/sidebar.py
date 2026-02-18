@@ -12,7 +12,8 @@ from PyQt6.QtWidgets import (
     QButtonGroup
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QSize
-from PyQt6.QtGui import QIcon, QFont, QPalette, QColor
+from PyQt6.QtGui import QIcon, QFont, QPalette, QColor, QPainter, QPixmap
+from PyQt6.QtSvg import QSvgRenderer
 
 from app.core.constants import ICONS
 from app.ui.theme import Colors
@@ -107,15 +108,12 @@ class DarkSidebar(QWidget):
 
         # Logo row
         logo_row = QHBoxLayout()
-        logo_row.setSpacing(12)
+        logo_row.setSpacing(10)
 
-        logo_icon = QLabel("⚡")
-        logo_icon.setStyleSheet(f"""
-            color: {Colors.PRIMARY};
-            font-size: 28px;
-            background: transparent;
-        """)
-        logo_icon.setFont(QFont("Segoe UI", 24))
+        logo_icon = QLabel()
+        logo_icon.setFixedSize(30, 30)
+        logo_icon.setStyleSheet("background: transparent;")
+        logo_icon.setPixmap(self._render_logo_pixmap(30))
         logo_row.addWidget(logo_icon)
 
         logo_text_container = QVBoxLayout()
@@ -132,14 +130,13 @@ class DarkSidebar(QWidget):
         self._logo_text.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         logo_text_container.addWidget(self._logo_text)
 
-        self._logo_subtext = QLabel("STUDIO")
+        self._logo_subtext = QLabel("Studio")
         self._logo_subtext.setStyleSheet(f"""
-            color: {Colors.SIDEBAR_SECTION};
-            font-size: 9px;
-            letter-spacing: 2px;
+            color: {Colors.PRIMARY};
+            font-size: 11px;
             background: transparent;
         """)
-        self._logo_subtext.setFont(QFont("Segoe UI", 8))
+        self._logo_subtext.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         logo_text_container.addWidget(self._logo_subtext)
 
         logo_row.addLayout(logo_text_container)
@@ -230,6 +227,20 @@ class DarkSidebar(QWidget):
         if self._nav_buttons:
             first_key = list(self._nav_buttons.keys())[0]
             self._set_button_active(first_key)
+
+    def _render_logo_pixmap(self, size: int) -> QPixmap:
+        """Render the DB Performance Studio logo as a pixmap."""
+        svg_data = b'''<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M16 10v44h16c13.3 0 24-9.8 24-22S45.3 10 32 10H16z" stroke="#0e8a9d" stroke-width="4" fill="none" stroke-linejoin="round"/>
+            <path d="M24 32h6l4-10 6 20 6-15 4 5h10" stroke="#0e8a9d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>'''
+        renderer = QSvgRenderer(svg_data)
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        return pixmap
 
     def _create_nav_button(self, item: NavItem) -> QPushButton:
         """Create a navigation button - GUI-05 style"""
@@ -366,12 +377,12 @@ class DarkSidebar(QWidget):
         """Show/hide section labels based on visible buttons."""
         if self._main_label:
             self._main_label.setVisible(
-                any(self._nav_buttons.get(nav_id) and self._nav_buttons[nav_id].isVisible()
+                any(self._nav_buttons.get(nav_id) and not self._nav_buttons[nav_id].isHidden()
                     for nav_id in self._main_nav_ids)
             )
         if self._tools_label:
             self._tools_label.setVisible(
-                any(self._nav_buttons.get(nav_id) and self._nav_buttons[nav_id].isVisible()
+                any(self._nav_buttons.get(nav_id) and not self._nav_buttons[nav_id].isHidden()
                     for nav_id in self._tools_nav_ids)
             )
 

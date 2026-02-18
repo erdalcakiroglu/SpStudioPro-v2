@@ -43,6 +43,7 @@ from app.services.connection_store import get_connection_store
 from app.services.credential_store import get_credential_store
 from app.database.connection import DatabaseConnection, AuthenticationError, ConnectionError as DBConnectionError, get_available_odbc_drivers, get_connection_manager
 from app.ui.components.sidebar import DarkSidebar
+from app.ui.components.prompt_editor import PromptEditor
 from app.ui.views.base_view import BaseView
 
 logger = get_logger("ui.settings")
@@ -1045,7 +1046,7 @@ class SettingsView(BaseView):
 
     def _apply_modern_styles(self) -> None:
         """Apply modern light theme styles"""
-        from app.ui.theme import Colors, Theme as ThemeStyles
+        from app.ui.theme import Colors
         
         self.setStyleSheet(f"""
             /* Background */
@@ -1087,18 +1088,18 @@ class SettingsView(BaseView):
                 border-top-left-radius: 8px;
                 border-top-right-radius: 8px;
                 padding: 10px 24px;
-                color: {Colors.TEXT_SECONDARY};
-                font-weight: 500;
+                color: #000000;
+                font-weight: 700;
                 margin-right: 4px;
             }}
             QTabBar::tab:selected {{
                 background-color: {Colors.SURFACE};
-                color: {Colors.PRIMARY};
-                font-weight: 600;
+                color: #000000;
+                font-weight: 700;
             }}
             QTabBar::tab:hover:!selected {{
                 background-color: #F8FAFC;
-                color: {Colors.TEXT_PRIMARY};
+                color: #000000;
             }}
             
             /* Labels */
@@ -1142,9 +1143,6 @@ class SettingsView(BaseView):
             QLineEdit::placeholder {{
                 color: {Colors.TEXT_MUTED};
             }}
-            
-            /* ComboBox */
-            {ThemeStyles.combobox_style()}
             
             /* SpinBox */
             QSpinBox {{
@@ -1235,6 +1233,13 @@ class SettingsView(BaseView):
                 padding: 8px;
                 color: {Colors.TEXT_PRIMARY};
             }}
+            QPlainTextEdit {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 8px;
+                color: {Colors.TEXT_PRIMARY};
+            }}
             QTextEdit#ProviderTestResult {{
                 font-size: 11px;
                 padding: 8px 10px;
@@ -1317,14 +1322,6 @@ class SettingsView(BaseView):
         # Apply modern styles
         self._apply_modern_styles()
         
-        # Title
-        title = QLabel("⚙️ Settings")
-        title.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; background: transparent;")
-        title.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
-        self._main_layout.addWidget(title)
-
-        self._main_layout.addSpacing(16)
-
         # Tab widget
         tabs = QTabWidget()
         tabs.addTab(self._create_general_tab(), "General")
@@ -1375,7 +1372,7 @@ class SettingsView(BaseView):
 
         self._language_combo = QComboBox()
         self._language_combo.addItem("English", Language.ENGLISH.value)
-        # Other UI languages will be added later.
+        # Interface language is locked to English for now.
         self._language_combo.setEnabled(False)
         lang_layout.addRow("Interface Language:", self._language_combo)
 
@@ -1453,9 +1450,22 @@ class SettingsView(BaseView):
         info_group = QGroupBox("Application Info")
         info_layout = QFormLayout(info_group)
 
-        info_layout.addRow("Version:", QLabel("1.0.0"))
-        info_layout.addRow("Build:", QLabel("2025.01.15"))
-        info_layout.addRow("Author:", QLabel("Erdal Cakiroglu"))
+        try:
+            from app import __version__, __build__, __author__
+            version_text = str(__version__ or "")
+            build_text = str(__build__ or "")
+            author_text = str(__author__ or "")
+        except Exception:
+            version_text = ""
+            build_text = ""
+            author_text = ""
+        info_layout.addRow("Version:", QLabel(version_text or "-"))
+        info_layout.addRow("Build:", QLabel(build_text or "-"))
+        info_layout.addRow("Author:", QLabel(author_text or "-"))
+
+        license_btn = QPushButton("View License Agreement")
+        license_btn.clicked.connect(self._show_license_dialog)
+        info_layout.addRow("License:", license_btn)
 
         # Show logs button
         logs_btn = QPushButton("Show Application Logs")
@@ -1547,7 +1557,9 @@ class SettingsView(BaseView):
         layout.addLayout(prompt_actions)
 
         prompt_help = QLabel(
-            "Note: You can include the default prompt using the {base_system} and {base_user} placeholders."
+            "Placeholders (optional): {global_instructions}, {sql_version}\n"
+            "Chat placeholders: {message}, {server_name}, {database_name}, {detected_intent}, {collected_data}\n"
+            "Self-reflection placeholders: {warning_text}"
         )
         prompt_help.setStyleSheet("color: #64748b; font-size: 11px;")
         layout.addWidget(prompt_help)
@@ -1559,7 +1571,7 @@ class SettingsView(BaseView):
         global_tab = QWidget()
         global_layout = QVBoxLayout(global_tab)
         global_layout.setContentsMargins(8, 8, 8, 8)
-        self._ai_global_instructions = QTextEdit()
+        self._ai_global_instructions = PromptEditor()
         self._ai_global_instructions.setPlaceholderText("Shared instructions for all AI analyses...")
         self._ai_global_instructions.setMinimumHeight(120)
         global_layout.addWidget(self._ai_global_instructions)
@@ -1568,10 +1580,10 @@ class SettingsView(BaseView):
         # Query analysis tab
         query_tab = QWidget()
         query_layout = QFormLayout(query_tab)
-        self._ai_query_system_edit = QTextEdit()
+        self._ai_query_system_edit = PromptEditor()
         self._ai_query_system_edit.setPlaceholderText("Query Analysis - System prompt override")
         self._ai_query_system_edit.setMinimumHeight(100)
-        self._ai_query_user_edit = QTextEdit()
+        self._ai_query_user_edit = PromptEditor()
         self._ai_query_user_edit.setPlaceholderText("Query Analysis - User prompt override")
         self._ai_query_user_edit.setMinimumHeight(100)
         query_layout.addRow("System Prompt:", self._ai_query_system_edit)
@@ -1581,10 +1593,10 @@ class SettingsView(BaseView):
         # SP analysis tab
         sp_tab = QWidget()
         sp_layout = QFormLayout(sp_tab)
-        self._ai_sp_system_edit = QTextEdit()
+        self._ai_sp_system_edit = PromptEditor()
         self._ai_sp_system_edit.setPlaceholderText("SP Analysis - System prompt override")
         self._ai_sp_system_edit.setMinimumHeight(100)
-        self._ai_sp_user_edit = QTextEdit()
+        self._ai_sp_user_edit = PromptEditor()
         self._ai_sp_user_edit.setPlaceholderText("SP Analysis - User prompt override")
         self._ai_sp_user_edit.setMinimumHeight(100)
         sp_layout.addRow("System Prompt:", self._ai_sp_system_edit)
@@ -1594,10 +1606,10 @@ class SettingsView(BaseView):
         # SP code only tab
         sp_code_tab = QWidget()
         sp_code_layout = QFormLayout(sp_code_tab)
-        self._ai_sp_code_system_edit = QTextEdit()
+        self._ai_sp_code_system_edit = PromptEditor()
         self._ai_sp_code_system_edit.setPlaceholderText("SP Code Only - System prompt override")
         self._ai_sp_code_system_edit.setMinimumHeight(100)
-        self._ai_sp_code_user_edit = QTextEdit()
+        self._ai_sp_code_user_edit = PromptEditor()
         self._ai_sp_code_user_edit.setPlaceholderText("SP Code Only - User prompt override")
         self._ai_sp_code_user_edit.setMinimumHeight(100)
         sp_code_layout.addRow("System Prompt:", self._ai_sp_code_system_edit)
@@ -1607,36 +1619,161 @@ class SettingsView(BaseView):
         # Index recommendation tab
         index_tab = QWidget()
         index_layout = QFormLayout(index_tab)
-        self._ai_index_system_edit = QTextEdit()
+        self._ai_index_system_edit = PromptEditor()
         self._ai_index_system_edit.setPlaceholderText("Index Recommendation - System prompt override")
         self._ai_index_system_edit.setMinimumHeight(100)
-        self._ai_index_user_edit = QTextEdit()
+        self._ai_index_user_edit = PromptEditor()
         self._ai_index_user_edit.setPlaceholderText("Index Recommendation - User prompt override")
         self._ai_index_user_edit.setMinimumHeight(100)
         index_layout.addRow("System Prompt:", self._ai_index_system_edit)
         index_layout.addRow("User Prompt:", self._ai_index_user_edit)
         self._prompt_tabs.addTab(index_tab, "Index Recommendation")
 
+        # Pre-classified index analysis tab
+        pre_idx_tab = QWidget()
+        pre_idx_layout = QFormLayout(pre_idx_tab)
+        self._ai_index_preclassified_system_edit = PromptEditor()
+        self._ai_index_preclassified_system_edit.setPlaceholderText("Index Analysis (Pre-classified) - System prompt")
+        self._ai_index_preclassified_system_edit.setMinimumHeight(110)
+        self._ai_index_preclassified_user_edit = PromptEditor()
+        self._ai_index_preclassified_user_edit.setPlaceholderText("Index Analysis (Pre-classified) - User prompt")
+        self._ai_index_preclassified_user_edit.setMinimumHeight(90)
+        pre_idx_layout.addRow("System Prompt:", self._ai_index_preclassified_system_edit)
+        pre_idx_layout.addRow("User Prompt:", self._ai_index_preclassified_user_edit)
+        self._prompt_tabs.addTab(pre_idx_tab, "Index Preclassified")
+
+        # Chat assistant tab
+        chat_tab = QWidget()
+        chat_layout = QFormLayout(chat_tab)
+        self._ai_chat_system_edit = PromptEditor()
+        self._ai_chat_system_edit.setPlaceholderText("Chat - System prompt")
+        self._ai_chat_system_edit.setMinimumHeight(100)
+        self._ai_chat_user_edit = PromptEditor()
+        self._ai_chat_user_edit.setPlaceholderText("Chat - User prompt template")
+        self._ai_chat_user_edit.setMinimumHeight(120)
+        chat_layout.addRow("System Prompt:", self._ai_chat_system_edit)
+        chat_layout.addRow("User Prompt:", self._ai_chat_user_edit)
+        self._prompt_tabs.addTab(chat_tab, "Chat Assistant")
+
+        # Deep analysis enhancement tab
+        deep_tab = QWidget()
+        deep_layout = QFormLayout(deep_tab)
+        self._ai_deep_analysis_user_edit = PromptEditor()
+        self._ai_deep_analysis_user_edit.setPlaceholderText("Deep Analysis - Prompt enhancement (user)")
+        self._ai_deep_analysis_user_edit.setMinimumHeight(160)
+        deep_layout.addRow("Enhancement Prompt:", self._ai_deep_analysis_user_edit)
+        self._prompt_tabs.addTab(deep_tab, "Deep Analysis")
+
+        # Self-reflection refinement tab
+        reflect_tab = QWidget()
+        reflect_layout = QFormLayout(reflect_tab)
+        self._ai_refinement_system_edit = PromptEditor()
+        self._ai_refinement_system_edit.setPlaceholderText("Self-Reflection Refinement - System prompt (optional)")
+        self._ai_refinement_system_edit.setMinimumHeight(80)
+        self._ai_refinement_user_edit = PromptEditor()
+        self._ai_refinement_user_edit.setPlaceholderText("Self-Reflection Refinement - User prompt template")
+        self._ai_refinement_user_edit.setMinimumHeight(140)
+        reflect_layout.addRow("System Prompt:", self._ai_refinement_system_edit)
+        reflect_layout.addRow("User Prompt:", self._ai_refinement_user_edit)
+        self._prompt_tabs.addTab(reflect_tab, "Self-Reflection")
+
         layout.addWidget(self._prompt_tabs)
         return widget
 
+    def _prompt_rules_locale(self) -> str:
+        # Interface language is locked to English for now.
+        return Language.ENGLISH.value
+
     def _reset_prompt_rules_ui(self) -> None:
         """Reset AI prompt rules UI fields to defaults."""
-        defaults = Settings().ai.prompt_rules
-        self._ai_global_instructions.setPlainText(
-            (defaults.get("global_instructions") or "").strip()
+        from app.ai.prompts.yaml_store import PromptRulesStore
+
+        locale = self._prompt_rules_locale()
+        store = PromptRulesStore()
+        store.reset_locale_to_defaults(locale)
+        self._load_prompt_rules_from_yaml()
+
+    def _load_prompt_rules_from_yaml(self) -> None:
+        from app.ai.prompts.yaml_store import PromptRulesStore
+
+        locale = self._prompt_rules_locale()
+        store = PromptRulesStore()
+
+        self._ai_global_instructions.setPlainText(store.load_rule(locale, "global").user)
+        self._ai_query_system_edit.setPlainText(store.load_rule(locale, "query_analysis").system)
+        self._ai_query_user_edit.setPlainText(store.load_rule(locale, "query_analysis").user)
+        self._ai_sp_system_edit.setPlainText(store.load_rule(locale, "sp_optimization").system)
+        self._ai_sp_user_edit.setPlainText(store.load_rule(locale, "sp_optimization").user)
+        self._ai_sp_code_system_edit.setPlainText(store.load_rule(locale, "sp_code_only").system)
+        self._ai_sp_code_user_edit.setPlainText(store.load_rule(locale, "sp_code_only").user)
+        self._ai_index_system_edit.setPlainText(store.load_rule(locale, "index_recommendation").system)
+        self._ai_index_user_edit.setPlainText(store.load_rule(locale, "index_recommendation").user)
+
+        self._ai_index_preclassified_system_edit.setPlainText(store.load_rule(locale, "index_analysis_preclassified").system)
+        self._ai_index_preclassified_user_edit.setPlainText(store.load_rule(locale, "index_analysis_preclassified").user)
+
+        self._ai_chat_system_edit.setPlainText(store.load_rule(locale, "chat").system)
+        self._ai_chat_user_edit.setPlainText(store.load_rule(locale, "chat").user)
+
+        self._ai_deep_analysis_user_edit.setPlainText(store.load_rule(locale, "deep_analysis_enhancement").user)
+        self._ai_refinement_system_edit.setPlainText(store.load_rule(locale, "self_reflection_refinement").system)
+        self._ai_refinement_user_edit.setPlainText(store.load_rule(locale, "self_reflection_refinement").user)
+
+    def _save_prompt_rules_to_yaml(self) -> None:
+        from app.ai.prompts.yaml_store import PromptRulesStore
+
+        locale = self._prompt_rules_locale()
+        store = PromptRulesStore()
+
+        store.save_rule(locale, "global", system="", user=self._ai_global_instructions.toPlainText().strip())
+        store.save_rule(
+            locale,
+            "query_analysis",
+            system=self._ai_query_system_edit.toPlainText().strip(),
+            user=self._ai_query_user_edit.toPlainText().strip(),
         )
-        overrides = defaults.get("overrides") or {}
-
-        def _set_override(key: str, system_edit: QTextEdit, user_edit: QTextEdit):
-            data = overrides.get(key, {}) or {}
-            system_edit.setPlainText((data.get("system") or "").strip())
-            user_edit.setPlainText((data.get("user") or "").strip())
-
-        _set_override("query_analysis", self._ai_query_system_edit, self._ai_query_user_edit)
-        _set_override("sp_optimization", self._ai_sp_system_edit, self._ai_sp_user_edit)
-        _set_override("sp_code_only", self._ai_sp_code_system_edit, self._ai_sp_code_user_edit)
-        _set_override("index_recommendation", self._ai_index_system_edit, self._ai_index_user_edit)
+        store.save_rule(
+            locale,
+            "sp_optimization",
+            system=self._ai_sp_system_edit.toPlainText().strip(),
+            user=self._ai_sp_user_edit.toPlainText().strip(),
+        )
+        store.save_rule(
+            locale,
+            "sp_code_only",
+            system=self._ai_sp_code_system_edit.toPlainText().strip(),
+            user=self._ai_sp_code_user_edit.toPlainText().strip(),
+        )
+        store.save_rule(
+            locale,
+            "index_recommendation",
+            system=self._ai_index_system_edit.toPlainText().strip(),
+            user=self._ai_index_user_edit.toPlainText().strip(),
+        )
+        store.save_rule(
+            locale,
+            "index_analysis_preclassified",
+            system=self._ai_index_preclassified_system_edit.toPlainText().strip(),
+            user=self._ai_index_preclassified_user_edit.toPlainText().strip(),
+        )
+        store.save_rule(
+            locale,
+            "chat",
+            system=self._ai_chat_system_edit.toPlainText().strip(),
+            user=self._ai_chat_user_edit.toPlainText().strip(),
+        )
+        store.save_rule(
+            locale,
+            "deep_analysis_enhancement",
+            system="",
+            user=self._ai_deep_analysis_user_edit.toPlainText().strip(),
+        )
+        store.save_rule(
+            locale,
+            "self_reflection_refinement",
+            system=self._ai_refinement_system_edit.toPlainText().strip(),
+            user=self._ai_refinement_user_edit.toPlainText().strip(),
+        )
 
     def _create_database_tab(self) -> QWidget:
         """Create database settings tab with connection management"""
@@ -1986,22 +2123,8 @@ class SettingsView(BaseView):
         # Load LLM providers
         self._load_llm_providers()
 
-        # Load AI prompt rules
-        prompt_rules = getattr(settings.ai, "prompt_rules", None) or {}
-        self._ai_global_instructions.setPlainText(
-            (prompt_rules.get("global_instructions") or "").strip()
-        )
-        overrides = prompt_rules.get("overrides") or {}
-
-        def _set_override(key: str, system_edit: QTextEdit, user_edit: QTextEdit):
-            data = overrides.get(key, {}) or {}
-            system_edit.setPlainText((data.get("system") or "").strip())
-            user_edit.setPlainText((data.get("user") or "").strip())
-
-        _set_override("query_analysis", self._ai_query_system_edit, self._ai_query_user_edit)
-        _set_override("sp_optimization", self._ai_sp_system_edit, self._ai_sp_user_edit)
-        _set_override("sp_code_only", self._ai_sp_code_system_edit, self._ai_sp_code_user_edit)
-        _set_override("index_recommendation", self._ai_index_system_edit, self._ai_index_user_edit)
+        # Load AI prompt rules (YAML)
+        self._load_prompt_rules_from_yaml()
 
     def _load_llm_providers(self):
         """Load saved LLM providers"""
@@ -2148,6 +2271,9 @@ class SettingsView(BaseView):
     def _save_settings(self) -> None:
         """Save settings"""
         try:
+            # Persist YAML prompt rules first
+            self._save_prompt_rules_to_yaml()
+
             # Collect LLM provider configurations
             llm_providers = {}
             for provider_id, config in self._llm_providers.items():
@@ -2170,8 +2296,8 @@ class SettingsView(BaseView):
                 enable_auto_update=self._check_updates_check.isChecked(),
                 ui={
                     "theme": Theme(self._theme_combo.currentData()),
-                    # English-only for now; other UI languages will be added later.
-                    "language": Language(self._language_combo.currentData() or Language.ENGLISH.value),
+                    # Interface language is locked to English for now.
+                    "language": Language.ENGLISH,
                     "font_size": self._font_size_spin.value(),
                     "code_font_size": self._code_font_size_spin.value(),
                     "show_line_numbers": self._line_numbers_check.isChecked(),
@@ -2188,27 +2314,6 @@ class SettingsView(BaseView):
                 ai={
                     "providers": llm_providers,
                     "active_provider_id": self._active_provider_id,
-                    "prompt_rules": {
-                        "global_instructions": self._ai_global_instructions.toPlainText().strip(),
-                        "overrides": {
-                            "query_analysis": {
-                                "system": self._ai_query_system_edit.toPlainText().strip(),
-                                "user": self._ai_query_user_edit.toPlainText().strip(),
-                            },
-                            "sp_optimization": {
-                                "system": self._ai_sp_system_edit.toPlainText().strip(),
-                                "user": self._ai_sp_user_edit.toPlainText().strip(),
-                            },
-                            "sp_code_only": {
-                                "system": self._ai_sp_code_system_edit.toPlainText().strip(),
-                                "user": self._ai_sp_code_user_edit.toPlainText().strip(),
-                            },
-                            "index_recommendation": {
-                                "system": self._ai_index_system_edit.toPlainText().strip(),
-                                "user": self._ai_index_user_edit.toPlainText().strip(),
-                            },
-                        },
-                    },
                 },
             )
 
@@ -2233,6 +2338,7 @@ class SettingsView(BaseView):
             msg.setText(f"Failed to save settings:\n{str(e)}")
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
+
 
     def _reset_settings(self) -> None:
         """Reset settings to defaults"""
@@ -2350,6 +2456,17 @@ class SettingsView(BaseView):
 
         except Exception as e:
             logger.error(f"Failed to get cache info: {e}")
+
+    def _show_license_dialog(self) -> None:
+        """Show license agreement dialog"""
+        try:
+            from app.ui.license_dialog import LicenseDialog
+            dialog = LicenseDialog(parent=self, require_accept=False)
+            result = dialog.exec()
+            if result == QDialog.DialogCode.Accepted and dialog.accepted:
+                update_settings(ui={"license_accepted": True})
+        except Exception as e:
+            logger.error(f"Failed to show license dialog: {e}")
 
     def _show_logs(self) -> None:
         """Show application logs"""

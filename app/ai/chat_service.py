@@ -432,13 +432,7 @@ class AIChatService:
             logger.warning("Ollama connection check failed, using formatted response")
             return self._format_data_response(intent_match, data)
         
-        # Build context for AI
-        system_prompt = """You are an AI assistant specializing in Microsoft SQL Server.
-Answer the user's questions in English.
-Use readable, well-structured Markdown.
-Explain technical terms when needed and provide concrete recommendations."""
-        
-        user_prompt = self._build_response_prompt(message, intent_match, data)
+        system_prompt, user_prompt = self._build_ai_prompts(message, intent_match, data)
         
         try:
             response = await self._ollama.generate_response(user_prompt, system_prompt)
@@ -454,22 +448,35 @@ Explain technical terms when needed and provide concrete recommendations."""
         intent_match: IntentMatch, 
         data: Dict[str, Any]
     ) -> str:
-        """Build prompt for AI response generation"""
-        prompt = f"""User Question: {message}
+        """Build user prompt from Settings > AI/LLM > AI Prompt Rules."""
+        _, user_prompt = self._build_ai_prompts(message, intent_match, data)
+        return user_prompt
 
-Context:
-- Server: {self._context.server_name}
-- Database: {self._context.database_name}
-- SQL Server Version: {self._context.sql_version}
-- Detected Intent: {intent_match.intent.value}
+    def _build_ai_prompts(
+        self,
+        message: str,
+        intent_match: IntentMatch,
+        data: Dict[str, Any],
+    ) -> tuple[str, str]:
+        from app.ai.prompts.rules import apply_template, resolve_active_locale
+        from app.ai.prompts.yaml_store import PromptRulesStore
 
-Collected Data:
-{self._format_data_for_prompt(data)}
+        locale = resolve_active_locale()
+        store = PromptRulesStore()
+        global_instructions = store.load_rule(locale, "global").user.strip()
+        chat_rule = store.load_rule(locale, "chat")
 
-Please analyze the data and provide a comprehensive answer to the user's question.
-Highlight key findings and include improvement recommendations when applicable."""
-        
-        return prompt
+        values = {
+            "locale": locale,
+            "global_instructions": global_instructions,
+            "sql_version": getattr(self._context, "sql_version", "") or "",
+            "server_name": getattr(self._context, "server_name", "") or "",
+            "database_name": getattr(self._context, "database_name", "") or "",
+            "message": message or "",
+            "detected_intent": getattr(intent_match.intent, "value", "") or "",
+            "collected_data": self._format_data_for_prompt(data or {}),
+        }
+        return apply_template(chat_rule.system, values).strip(), apply_template(chat_rule.user, values).strip()
 
     @staticmethod
     def _get_sql_version_string(conn) -> str:

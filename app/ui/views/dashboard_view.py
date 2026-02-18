@@ -6,14 +6,15 @@ Based on GUI-05.py design - 4x4 Metric Cards Grid
 from typing import Optional, Dict
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QFrame, QGridLayout, QSizePolicy, QMessageBox,
-    QPushButton, QComboBox, QScrollArea
+    QPushButton, QComboBox, QScrollArea, QProgressBar
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from app.ui.views.base_view import BaseView
+from app.ui.theme import Colors
 from app.ui.theme import Colors, Theme as ThemeStyles
 from app.core.logger import get_logger
 from app.database.connection import get_connection_manager
@@ -155,6 +156,130 @@ class MetricCard(QFrame):
         self.value_label.setStyleSheet(f"color: {color}; font-size: 24px; font-weight: 600;")
 
 
+class MetricBarRow(QWidget):
+    """Compact metric row with value + progress bar (Wait Categories style)."""
+
+    _STATUS_COLORS = {
+        "good": Colors.SUCCESS,
+        "bad": Colors.ERROR,
+        "warning": Colors.WARNING,
+        "normal": Colors.PRIMARY,
+    }
+
+    _STATUS_GAUGE = {
+        "good": 20.0,
+        "normal": 40.0,
+        "warning": 70.0,
+        "bad": 90.0,
+    }
+
+    def __init__(self, label: str, unit: str = "", help_text: str = "", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._unit = str(unit or "").strip()
+        self._help_text = str(help_text or "").strip()
+        self._setup_ui(str(label or ""))
+
+    def _setup_ui(self, label: str) -> None:
+        self.setStyleSheet("background: transparent;")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self._name_label = QLabel(label)
+        if self._help_text:
+            self._name_label.setToolTip(self._help_text)
+        self._name_label.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: 11px; font-weight: 600; background: transparent;"
+        )
+        self._name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._name_label.setMinimumWidth(110)
+        layout.addWidget(self._name_label)
+
+        colon = QLabel(":")
+        colon.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: 11px; font-weight: 600; background: transparent;"
+        )
+        colon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        colon.setFixedWidth(10)
+        layout.addWidget(colon)
+
+        self._value_label = QLabel("--")
+        self._value_label.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; font-size: 11px; font-weight: 700; background: transparent;"
+        )
+        self._value_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._value_label.setMinimumWidth(86)
+        layout.addWidget(self._value_label)
+
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 1000)
+        self._bar.setValue(0)
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(10)
+        self._bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout.addWidget(self._bar, 1)
+
+        self._pct_label = QLabel("")
+        self._pct_label.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: 700; background: transparent;"
+        )
+        self._pct_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._pct_label.setFixedWidth(54)
+        layout.addWidget(self._pct_label)
+
+        self._apply_bar_style(self._STATUS_COLORS["normal"])
+
+    @staticmethod
+    def _safe_float(value: object) -> Optional[float]:
+        try:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            text = str(value).strip().replace(",", "")
+            if not text:
+                return None
+            return float(text)
+        except Exception:
+            return None
+
+    def _apply_bar_style(self, color: str) -> None:
+        self._bar.setStyleSheet(f"""
+            QProgressBar {{
+                border: 1px solid {Colors.BORDER};
+                border-radius: 5px;
+                background: {Colors.BACKGROUND};
+            }}
+            QProgressBar::chunk {{
+                background: {color};
+                border-radius: 4px;
+            }}
+        """)
+        self._pct_label.setStyleSheet(
+            f"color: {color}; font-size: 10px; font-weight: 700; background: transparent;"
+        )
+
+    def set_value(self, value: str, status: str = "normal") -> None:
+        status_key = str(status or "normal").strip().lower()
+        accent = self._STATUS_COLORS.get(status_key, self._STATUS_COLORS["normal"])
+
+        raw_num = self._safe_float(value)
+        unit = self._unit
+        if unit == "%":
+            display_value = f"{int(raw_num) if raw_num is not None else str(value)}%"
+            pct = float(max(0.0, min(100.0, raw_num if raw_num is not None else 0.0)))
+        else:
+            display_value = str(value)
+            if unit:
+                display_value = f"{display_value} {unit}"
+            pct = float(self._STATUS_GAUGE.get(status_key, self._STATUS_GAUGE["normal"]))
+
+        self._value_label.setText(display_value)
+        self._apply_bar_style(accent)
+        self._bar.setValue(int(max(0.0, min(100.0, pct)) * 10.0))
+        self._pct_label.setText(f"{pct:.1f}%")
+
+
 class DashboardView(BaseView):
     """
     Server overview dashboard - GUI-05 style
@@ -174,6 +299,7 @@ class DashboardView(BaseView):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._metric_cards: Dict[str, MetricCard] = {}
+        self._metric_rows: Dict[str, MetricBarRow] = {}
         self._last_server = ""
         self._last_version = ""
         self._is_refreshing = False
@@ -204,15 +330,6 @@ class DashboardView(BaseView):
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(12)
         
-        # Title
-        title = QLabel("Dashboard")
-        title.setStyleSheet(f"""
-            color: {Colors.TEXT_PRIMARY}; 
-            font-size: 20px; 
-            font-weight: 700;
-            background: transparent;
-        """)
-        header_row.addWidget(title)
         header_row.addStretch()
         
         # Refresh rate label
@@ -226,8 +343,8 @@ class DashboardView(BaseView):
         self._cmb_refresh_rate.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._cmb_refresh_rate.addItems(["5s", "15s", "30s", "60s"])
         self._cmb_refresh_rate.setCurrentIndex(1)  # Default 15s
-        self._cmb_refresh_rate.setStyleSheet(ThemeStyles.combobox_style())
         self._cmb_refresh_rate.currentIndexChanged.connect(self._on_refresh_rate_changed)
+        self._cmb_refresh_rate.setStyleSheet(ThemeStyles.combobox_style())
         header_row.addWidget(self._cmb_refresh_rate)
         
         # Stop/Start button (default: stopped)
@@ -314,25 +431,36 @@ class DashboardView(BaseView):
             )
             section_layout.addWidget(header)
 
-            grid = QGridLayout()
-            # Use spacer columns to shrink card width (~-10%) while keeping layout responsive.
-            grid.setHorizontalSpacing(0)
-            grid.setVerticalSpacing(10)
+            panel = QFrame()
+            panel.setObjectName("MetricPanel")
+            panel.setStyleSheet(f"""
+                QFrame#MetricPanel {{
+                    background-color: {Colors.SURFACE};
+                    border: 0.5px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 8px;
+                }}
+            """)
+            panel_layout = QVBoxLayout(panel)
+            panel_layout.setContentsMargins(10, 10, 10, 10)
+            panel_layout.setSpacing(6)
+
+            rows_grid = QGridLayout()
+            rows_grid.setContentsMargins(0, 0, 0, 0)
+            rows_grid.setHorizontalSpacing(16)
+            rows_grid.setVerticalSpacing(8)
 
             for idx, (key, card_title, unit, help_text) in enumerate(metrics_data):
-                card = MetricCard(card_title, "0", unit, help_text)
-                self._metric_cards[key] = card
-                row = idx // 4
-                col = (idx % 4) * 2  # 0,2,4,6 (leave 1,3,5 as spacer columns)
-                grid.addWidget(card, row, col)
+                row_widget = MetricBarRow(card_title, unit, help_text)
+                self._metric_rows[key] = row_widget
+                row = idx // 2
+                col = idx % 2
+                rows_grid.addWidget(row_widget, row, col)
 
-            # Card columns: 9, spacer columns: 1  => each card becomes ~10% narrower.
-            for c in (0, 2, 4, 6):
-                grid.setColumnStretch(c, 9)
-            for c in (1, 3, 5):
-                grid.setColumnStretch(c, 1)
-
-            section_layout.addLayout(grid)
+            rows_grid.setColumnStretch(0, 1)
+            rows_grid.setColumnStretch(1, 1)
+            panel_layout.addLayout(rows_grid)
+            section_layout.addWidget(panel)
             parent_layout.addWidget(section_widget)
 
         # 1) SERVER HEALTH
@@ -543,44 +671,7 @@ class DashboardView(BaseView):
             ],
         )
 
-        # 6) WAIT CATEGORIES
-        add_section(
-            "WAIT CATEGORIES",
-            [
-                (
-                    "cpu_wait",
-                    "CPU Wait",
-                    "%",
-                    "CPU-related waits (% of total wait time; best-effort grouping).\n\n"
-                    "Based on sys.dm_os_wait_stats and mapped wait types such as SOS_SCHEDULER_YIELD and CX*.\n\n"
-                    "Use this as a directional signal. For root-cause, review top wait types and correlate with Runnable Queue and CPU%.",
-                ),
-                (
-                    "io_wait",
-                    "IO Wait",
-                    "%",
-                    "IO-related waits (% of total wait time; best-effort grouping).\n\n"
-                    "Based on sys.dm_os_wait_stats and mapped wait types such as PAGEIOLATCH_* and WRITELOG.\n\n"
-                    "If high, correlate with IO latencies and pending IO (Disk Queue Length).",
-                ),
-                (
-                    "lock_wait",
-                    "Lock Wait",
-                    "%",
-                    "Lock-related waits (% of total wait time; best-effort grouping).\n\n"
-                    "Based on sys.dm_os_wait_stats and mapped LCK_M_* waits.\n\n"
-                    "If high, investigate blocking chains, transaction duration, and hot rows/tables.",
-                ),
-                (
-                    "memory_wait",
-                    "Memory Wait",
-                    "%",
-                    "Memory-related waits (% of total wait time; best-effort grouping).\n\n"
-                    "Based on sys.dm_os_wait_stats and mapped waits such as RESOURCE_SEMAPHORE.\n\n"
-                    "If high, investigate memory grants, large sorts/hashes, and query design/indexing.",
-                ),
-            ],
-        )
+        # WAIT CATEGORIES panel removed per UI request.
     
     def _on_refresh_rate_changed(self, index: int) -> None:
         """Handle refresh rate change"""
@@ -660,7 +751,9 @@ class DashboardView(BaseView):
     
     def update_metric(self, metric_key: str, value: str, status: str = "normal") -> None:
         """Update a specific metric value"""
-        if metric_key in self._metric_cards:
+        if metric_key in self._metric_rows:
+            self._metric_rows[metric_key].set_value(value, status)
+        elif metric_key in self._metric_cards:
             self._metric_cards[metric_key].set_value(value, status)
     
     def refresh(self) -> None:
@@ -803,34 +896,7 @@ class DashboardView(BaseView):
                 "good" if pfs_gam == 0 else ("warning" if pfs_gam < 10 else "bad"),
             )
 
-            # WAIT CATEGORIES
-            cpu_wait = getattr(metrics, "cpu_wait_percent", 0)
-            io_wait = getattr(metrics, "io_wait_percent", 0)
-            lock_wait = getattr(metrics, "lock_wait_percent", 0)
-            mem_wait = getattr(metrics, "memory_wait_percent", 0)
-
-            self.update_metric(
-                "cpu_wait",
-                str(cpu_wait),
-                "good" if cpu_wait < 30 else ("warning" if cpu_wait < 50 else "bad"),
-            )
-            self.update_metric(
-                "io_wait",
-                str(io_wait),
-                "good" if io_wait < 30 else ("warning" if io_wait < 50 else "bad"),
-            )
-            self.update_metric(
-                "lock_wait",
-                str(lock_wait),
-                "good" if lock_wait < 20 else ("warning" if lock_wait < 40 else "bad"),
-            )
-            self.update_metric(
-                "memory_wait",
-                str(mem_wait),
-                "good" if mem_wait < 20 else ("warning" if mem_wait < 40 else "bad"),
-            )
-
             self._has_loaded_once = True
-            
+
         except Exception as e:
             logger.error(f"Failed to refresh dashboard stats: {e}")

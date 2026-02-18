@@ -60,7 +60,7 @@ DEFAULT_OLLAMA_HOST: Final[str] = "http://localhost:11434"
 DEFAULT_MODEL: Final[str] = "codellama"
 DEFAULT_TEMPERATURE: Final[float] = 0.1
 DEFAULT_MAX_TOKENS: Final[int] = 4096
-AI_RESPONSE_TIMEOUT: Final[int] = 120  # seconds
+AI_RESPONSE_TIMEOUT: Final[int] = 300  # seconds
 MAX_RETRY_ATTEMPTS: Final[int] = 3
 
 # =============================================================================

@@ -5,7 +5,33 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="4cc2db32-8c24-4061-98d4-b9ac86f6b793" name="Changes" comment="third commit">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ai/analysis_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ai/analysis_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ai/llm_client.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ai/llm_client.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/analysis/plan_parser.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/analysis/plan_parser.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/core/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/core/logger.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/logger.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/database/connection.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/database/connection.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/database/queries/query_store_queries.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/database/queries/query_store_queries.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/database/queries/wait_stats_queries.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/database/queries/wait_stats_queries.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/models/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/models/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/models/query_stats_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/models/query_stats_models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/query_stats_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/query_stats_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/wait_stats_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/wait_stats_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/components/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/components/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/main_window.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/theme.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/theme.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/views/base_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/views/base_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/views/blocking_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/views/blocking_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/views/dashboard_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/views/dashboard_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/views/index_advisor_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/views/index_advisor_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/views/query_stats_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/views/query_stats_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/views/settings_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/views/settings_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/views/sp_explorer_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/views/sp_explorer_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/ui/views/wait_stats_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/ui/views/wait_stats_view.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -92,7 +118,15 @@
       <option name="project" value="LOCAL" />
       <updated>1770571081706</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="third commit">
+      <option name="closed" value="true" />
+      <created>1770571424221</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1770571424221</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

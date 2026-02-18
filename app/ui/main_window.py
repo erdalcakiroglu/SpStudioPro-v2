@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QIcon, QCloseEvent, QFont
+from datetime import datetime, timezone
 
 from app.core.constants import (
     APP_NAME, 
@@ -22,7 +23,7 @@ from app.core.constants import (
 from app.core.config import get_settings, update_settings
 from app.core.logger import get_logger
 from app.database.connection import get_connection_manager
-from app.ui.theme import ThemeManager, apply_theme, Colors, Theme as ThemeStyles
+from app.ui.theme import ThemeManager, Theme as ThemeStyles, apply_theme, Colors
 from app.ui.components.sidebar import Sidebar, DarkSidebar
 from app.ui.views.base_view import BaseView
 from app.ui.views.chat_view import ChatView
@@ -35,6 +36,7 @@ from app.ui.views.sp_explorer_view import ObjectExplorerView
 from app.ui.views.jobs_view import JobsView
 from app.ui.views.wait_stats_view import WaitStatsView
 from app.ui.views.blocking_view import BlockingView
+from app.services.service_factory import ServiceFactory
 
 logger = get_logger('ui.main')
 
@@ -63,6 +65,7 @@ class InfoBar(QFrame):
                 background-color: {Colors.SURFACE};
                 border-top: 1px solid {Colors.BORDER};
             }}
+            {ThemeStyles.combobox_style()}
         """)
         self._build_ui()
         self._load_profiles()
@@ -104,7 +107,7 @@ class InfoBar(QFrame):
         self._server_combo = QComboBox()
         self._server_combo.setMinimumWidth(180)
         self._server_combo.setMaximumWidth(250)
-        self._server_combo.setStyleSheet(self._combo_style())
+        self._apply_combobox_style(self._server_combo)
         self._server_combo.currentIndexChanged.connect(self._on_server_changed)
         status_layout.addWidget(self._server_combo)
 
@@ -122,7 +125,7 @@ class InfoBar(QFrame):
         self._database_combo = QComboBox()
         self._database_combo.setMinimumWidth(150)
         self._database_combo.setMaximumWidth(200)
-        self._database_combo.setStyleSheet(self._combo_style())
+        self._apply_combobox_style(self._database_combo)
         self._database_combo.currentIndexChanged.connect(self._on_database_changed)
         status_layout.addWidget(self._database_combo)
 
@@ -145,6 +148,22 @@ class InfoBar(QFrame):
         self._version_value.setToolTip("SQL Server version")
         status_layout.addWidget(self._version_value)
 
+        # Separator
+        sep4 = QLabel("•")
+        sep4.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 12px; background: transparent;")
+        status_layout.addWidget(sep4)
+
+        # License label
+        self._license_label = QLabel("License:")
+        self._license_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px; background: transparent;")
+        status_layout.addWidget(self._license_label)
+
+        # License value
+        self._license_value = QLabel("-")
+        self._license_value.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px; background: transparent;")
+        self._license_value.setToolTip("License status")
+        status_layout.addWidget(self._license_value)
+
         # Right side - AI Model selector
         ai_container = QWidget()
         ai_container.setStyleSheet("background: transparent;")
@@ -161,7 +180,7 @@ class InfoBar(QFrame):
         self._ai_model_combo = QComboBox()
         self._ai_model_combo.setMinimumWidth(180)
         self._ai_model_combo.setMaximumWidth(250)
-        self._ai_model_combo.setStyleSheet(self._combo_style())
+        self._apply_combobox_style(self._ai_model_combo)
         self._ai_model_combo.currentIndexChanged.connect(self._on_ai_model_changed)
         ai_layout.addWidget(self._ai_model_combo)
         
@@ -176,9 +195,13 @@ class InfoBar(QFrame):
         # Load AI models
         self._load_ai_models()
 
-    def _combo_style(self) -> str:
-        """ComboBox style for light background - GUI-05 style"""
-        return ThemeStyles.combobox_style()
+    @staticmethod
+    def _apply_combobox_style(combo: QComboBox) -> None:
+        """Ensure InfoBar combobox/popup uses the same centralized style rules."""
+        combo.setStyleSheet(ThemeStyles.combobox_style())
+        popup_view = combo.view()
+        if popup_view is not None:
+            popup_view.setStyleSheet(ThemeStyles.combobox_popup_view_style())
 
     def _load_profiles(self) -> None:
         """Load connection profiles into server combo"""
@@ -436,6 +459,15 @@ class InfoBar(QFrame):
         self._load_ai_models()
         self._update_ai_status(status)
 
+    def set_license_status(self, text: str, color: Optional[str] = None, tooltip: str = "") -> None:
+        self._license_value.setText(text or "-")
+        if color:
+            self._license_value.setStyleSheet(
+                f"color: {color}; font-size: 12px; background: transparent;"
+            )
+        if tooltip:
+            self._license_value.setToolTip(tooltip)
+
 
 class MainWindow(QMainWindow):
     """
@@ -452,6 +484,8 @@ class MainWindow(QMainWindow):
         
         self._views: Dict[str, BaseView] = {}
         self._current_view_id: Optional[str] = None
+        self._service_factory = ServiceFactory
+        self._query_stats_service = self._service_factory.create_query_stats_service()
         
         self._setup_window()
         self._setup_ui()
@@ -553,7 +587,13 @@ class MainWindow(QMainWindow):
         }
         
         for view_id, view_class in view_classes.items():
-            view = view_class()
+            if view_id == "query_stats":
+                view = view_class(
+                    service=self._query_stats_service,
+                    service_factory=self._service_factory.create_query_stats_service,
+                )
+            else:
+                view = view_class()
             self._register_view(view_id, view)
     
     def _register_view(self, view_id: str, view: BaseView) -> None:
@@ -580,6 +620,14 @@ class MainWindow(QMainWindow):
         if "dashboard" in self._views:
             self._views["dashboard"].action_requested.connect(self._navigate_to)
 
+        # Query Statistics cross-module actions
+        if "query_stats" in self._views:
+            qs_view = self._views["query_stats"]
+            if hasattr(qs_view, "cross_module_navigation_requested"):
+                qs_view.cross_module_navigation_requested.connect(
+                    self._on_query_stats_cross_module_navigation
+                )
+
         # Connection changes
         get_connection_manager().connection_changed.connect(self.update_connection_status)
         
@@ -599,7 +647,52 @@ class MainWindow(QMainWindow):
         
         # Update info bar model status
         self._info_bar.set_model_status(settings.ai.model)
+        self._update_license_status()
         self._apply_navigation_visibility()
+
+    def _update_license_status(self) -> None:
+        settings = get_settings()
+        status = str(getattr(settings.license, "status", "") or "unknown")
+        expires_at = getattr(settings.license, "trial_expires_at", None)
+        license_count = int(getattr(settings.license, "license_count", 0) or 0)
+        allowed_devices = int(getattr(settings.license, "allowed_devices", 0) or 0)
+
+        tooltip_parts = []
+        if license_count:
+            tooltip_parts.append(f"Licenses: {license_count}")
+        if allowed_devices:
+            tooltip_parts.append(f"Allowed devices: {allowed_devices}")
+
+        if status == "trial_active" and expires_at:
+            try:
+                exp = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            except Exception:
+                exp = None
+            if exp:
+                remaining = exp - datetime.now(timezone.utc)
+                days_left = max(0, int(remaining.total_seconds() // 86400))
+                self._info_bar.set_license_status(
+                    f"Trial: {days_left}d",
+                    color=Colors.WARNING,
+                    tooltip=" | ".join(tooltip_parts) or "Trial active",
+                )
+                return
+        if status == "active":
+            self._info_bar.set_license_status(
+                "Active",
+                color=Colors.SUCCESS,
+                tooltip=" | ".join(tooltip_parts) or "License active",
+            )
+            return
+        if status in {"trial_expired", "expired", "inactive"}:
+            self._info_bar.set_license_status(
+                "Inactive",
+                color=Colors.ERROR,
+                tooltip="License inactive",
+            )
+            return
+
+        self._info_bar.set_license_status("-", color=Colors.TEXT_SECONDARY, tooltip="License status")
 
     def _get_navigation_visibility(self) -> Dict[str, bool]:
         """Return merged navigation visibility settings with safe defaults."""
@@ -703,6 +796,23 @@ class MainWindow(QMainWindow):
         if chat_view:
             chat_view.remove_loading_indicator()
             chat_view.add_ai_response(response)
+
+    def _on_query_stats_cross_module_navigation(self, target_view_id: str, context_obj: object) -> None:
+        """Handle Query Statistics -> module navigation with shared analysis context."""
+        target = str(target_view_id or "").strip()
+        if target not in self._views:
+            logger.warning(f"Cross-module navigation target not found: {target}")
+            return
+
+        self._navigate_to(target)
+        view = self._views.get(target)
+        if view and hasattr(view, "receive_analysis_context"):
+            if bool(getattr(view, "uses_app_event_bus_context", False)):
+                return
+            try:
+                view.receive_analysis_context(context_obj)
+            except Exception as exc:
+                logger.warning(f"Failed to deliver analysis context to '{target}': {exc}")
     
     def _on_ai_error(self, error: str) -> None:
         """Handle AI error"""
@@ -746,9 +856,14 @@ class MainWindow(QMainWindow):
             # Update dashboard
             if "dashboard" in self._views:
                 self._views["dashboard"].update_server_info(server)
+
+            # Ensure DB-dependent views (especially Object Explorer) refresh
+            # on initial connection and active-connection switches.
+            self._refresh_database_dependent_views()
         else:
             self._info_bar.set_disconnected()
             self._sidebar.update_connection_status(False)
+            self._refresh_database_dependent_views()
     
     def _on_infobar_server_changed(self, profile_id: str) -> None:
         """Handle server change from info bar"""
@@ -807,6 +922,19 @@ class MainWindow(QMainWindow):
     
     def _refresh_database_dependent_views(self) -> None:
         """Refresh views that depend on database context"""
+        from app.services.query_stats_service import QueryStatsService
+
+        # Invalidate per-connection caches on connection/database switches.
+        QueryStatsService.invalidate_global_cache(clear_sql_version=False)
+
+        conn_mgr = get_connection_manager()
+        active_conn = conn_mgr.active_connection
+        if active_conn and active_conn.is_connected:
+            # Warm Query Stats cache on connect/switch and keep periodic refresh alive.
+            QueryStatsService.warm_cache_async(active_conn)
+        else:
+            QueryStatsService.stop_background_refresh()
+
         # Refresh Object Explorer if visible
         if "sp_explorer" in self._views:
             sp_view = self._views["sp_explorer"]

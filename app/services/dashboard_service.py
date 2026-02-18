@@ -63,10 +63,23 @@ class DashboardMetrics:
     # ---------------------------------------------------------------------
     # WAIT CATEGORIES
     # ---------------------------------------------------------------------
+    total_wait_ms: int = 0
+    cpu_wait_ms: int = 0
+    io_wait_ms: int = 0
+    lock_wait_ms: int = 0
+    latch_wait_ms: int = 0
+    memory_wait_ms: int = 0
+    network_wait_ms: int = 0
+    buffer_wait_ms: int = 0
+    other_wait_ms: int = 0
     cpu_wait_percent: int = 0
     io_wait_percent: int = 0
     lock_wait_percent: int = 0
+    latch_wait_percent: int = 0
     memory_wait_percent: int = 0
+    network_wait_percent: int = 0
+    buffer_wait_percent: int = 0
+    other_wait_percent: int = 0
     signal_wait_percent: int = 0  # Signal Wait % (kept; used elsewhere)
 
     # ---------------------------------------------------------------------
@@ -177,10 +190,23 @@ class DashboardService:
             # Waits
             metrics.signal_wait_percent = self._get_signal_wait_percent(conn)
             wait_cats = self._get_wait_category_percents(conn)
+            metrics.total_wait_ms = int(wait_cats.get('total_wait_ms', 0) or 0)
+            metrics.cpu_wait_ms = int(wait_cats.get('cpu_wait_ms', 0) or 0)
+            metrics.io_wait_ms = int(wait_cats.get('io_wait_ms', 0) or 0)
+            metrics.lock_wait_ms = int(wait_cats.get('lock_wait_ms', 0) or 0)
+            metrics.latch_wait_ms = int(wait_cats.get('latch_wait_ms', 0) or 0)
+            metrics.memory_wait_ms = int(wait_cats.get('memory_wait_ms', 0) or 0)
+            metrics.network_wait_ms = int(wait_cats.get('network_wait_ms', 0) or 0)
+            metrics.buffer_wait_ms = int(wait_cats.get('buffer_wait_ms', 0) or 0)
+            metrics.other_wait_ms = int(wait_cats.get('other_wait_ms', 0) or 0)
             metrics.cpu_wait_percent = wait_cats.get('cpu_wait_percent', 0)
             metrics.io_wait_percent = wait_cats.get('io_wait_percent', 0)
             metrics.lock_wait_percent = wait_cats.get('lock_wait_percent', 0)
+            metrics.latch_wait_percent = wait_cats.get('latch_wait_percent', 0)
             metrics.memory_wait_percent = wait_cats.get('memory_wait_percent', 0)
+            metrics.network_wait_percent = wait_cats.get('network_wait_percent', 0)
+            metrics.buffer_wait_percent = wait_cats.get('buffer_wait_percent', 0)
+            metrics.other_wait_percent = wait_cats.get('other_wait_percent', 0)
             
             # TempDB
             metrics.tempdb_usage_percent = self._get_tempdb_usage(conn)
@@ -791,40 +817,93 @@ class DashboardService:
             cat AS (
                 SELECT
                     SUM(CASE
-                        WHEN wait_type IN ('SOS_SCHEDULER_YIELD', 'THREADPOOL')
+                        WHEN wait_type IN ('SOS_SCHEDULER_YIELD', 'THREADPOOL', 'EXCHANGE')
                              OR wait_type LIKE 'CX%'
                             THEN wait_time_ms ELSE 0 END) AS cpu_ms,
                     SUM(CASE
                         WHEN wait_type LIKE 'PAGEIOLATCH_%'
-                             OR wait_type IN ('IO_COMPLETION', 'ASYNC_IO_COMPLETION', 'ASYNC_NETWORK_IO', 'WRITELOG', 'LOGBUFFER', 'BACKUPIO')
+                             OR wait_type IN ('IO_COMPLETION', 'ASYNC_IO_COMPLETION', 'WRITELOG', 'LOGBUFFER', 'BACKUPIO', 'BACKUPBUFFER')
                             THEN wait_time_ms ELSE 0 END) AS io_ms,
                     SUM(CASE
                         WHEN wait_type LIKE 'LCK_M_%'
                             THEN wait_time_ms ELSE 0 END) AS lock_ms,
                     SUM(CASE
+                        WHEN wait_type LIKE 'PAGELATCH_%' OR wait_type LIKE 'LATCH_%'
+                            THEN wait_time_ms ELSE 0 END) AS latch_ms,
+                    SUM(CASE
                         WHEN wait_type IN ('RESOURCE_SEMAPHORE', 'RESOURCE_SEMAPHORE_QUERY_COMPILE', 'MEMORY_GRANT_UPDATE')
-                             OR wait_type LIKE 'MEMORY_%'
+                              OR wait_type LIKE 'MEMORY_%'
                             THEN wait_time_ms ELSE 0 END) AS mem_ms
+                    ,SUM(CASE
+                        WHEN wait_type IN ('ASYNC_NETWORK_IO', 'NET_WAITFOR_PACKET')
+                            THEN wait_time_ms ELSE 0 END) AS net_ms
+                    ,SUM(CASE
+                        WHEN wait_type IN ('BUFFER', 'DBMIRROR_DBM_MUTEX')
+                            THEN wait_time_ms ELSE 0 END) AS buffer_ms
                 FROM w
             )
             SELECT
+                CAST(tot.total_ms AS BIGINT) AS total_wait_ms,
+                CAST(cat.cpu_ms AS BIGINT) AS cpu_wait_ms,
+                CAST(cat.io_ms AS BIGINT) AS io_wait_ms,
+                CAST(cat.lock_ms AS BIGINT) AS lock_wait_ms,
+                CAST(cat.latch_ms AS BIGINT) AS latch_wait_ms,
+                CAST(cat.mem_ms AS BIGINT) AS memory_wait_ms,
+                CAST(cat.net_ms AS BIGINT) AS network_wait_ms,
+                CAST(cat.buffer_ms AS BIGINT) AS buffer_wait_ms,
+                CAST((tot.total_ms - (cat.cpu_ms + cat.io_ms + cat.lock_ms + cat.latch_ms + cat.mem_ms + cat.net_ms + cat.buffer_ms)) AS BIGINT) AS other_wait_ms,
                 CAST(cat.cpu_ms * 100.0 / NULLIF(tot.total_ms, 0) AS INT) AS cpu_wait_percent,
                 CAST(cat.io_ms * 100.0 / NULLIF(tot.total_ms, 0) AS INT) AS io_wait_percent,
                 CAST(cat.lock_ms * 100.0 / NULLIF(tot.total_ms, 0) AS INT) AS lock_wait_percent,
-                CAST(cat.mem_ms * 100.0 / NULLIF(tot.total_ms, 0) AS INT) AS memory_wait_percent
+                CAST(cat.latch_ms * 100.0 / NULLIF(tot.total_ms, 0) AS INT) AS latch_wait_percent,
+                CAST(cat.mem_ms * 100.0 / NULLIF(tot.total_ms, 0) AS INT) AS memory_wait_percent,
+                CAST(cat.net_ms * 100.0 / NULLIF(tot.total_ms, 0) AS INT) AS network_wait_percent,
+                CAST(cat.buffer_ms * 100.0 / NULLIF(tot.total_ms, 0) AS INT) AS buffer_wait_percent,
+                CAST((tot.total_ms - (cat.cpu_ms + cat.io_ms + cat.lock_ms + cat.latch_ms + cat.mem_ms + cat.net_ms + cat.buffer_ms)) * 100.0 / NULLIF(tot.total_ms, 0) AS INT) AS other_wait_percent
             FROM cat CROSS JOIN tot
             """
             result = conn.execute_query(query)
             if result:
                 return {
+                    'total_wait_ms': int(result[0].get('total_wait_ms', 0) or 0),
+                    'cpu_wait_ms': int(result[0].get('cpu_wait_ms', 0) or 0),
+                    'io_wait_ms': int(result[0].get('io_wait_ms', 0) or 0),
+                    'lock_wait_ms': int(result[0].get('lock_wait_ms', 0) or 0),
+                    'latch_wait_ms': int(result[0].get('latch_wait_ms', 0) or 0),
+                    'memory_wait_ms': int(result[0].get('memory_wait_ms', 0) or 0),
+                    'network_wait_ms': int(result[0].get('network_wait_ms', 0) or 0),
+                    'buffer_wait_ms': int(result[0].get('buffer_wait_ms', 0) or 0),
+                    'other_wait_ms': int(result[0].get('other_wait_ms', 0) or 0),
                     'cpu_wait_percent': result[0].get('cpu_wait_percent', 0) or 0,
                     'io_wait_percent': result[0].get('io_wait_percent', 0) or 0,
                     'lock_wait_percent': result[0].get('lock_wait_percent', 0) or 0,
+                    'latch_wait_percent': result[0].get('latch_wait_percent', 0) or 0,
                     'memory_wait_percent': result[0].get('memory_wait_percent', 0) or 0,
+                    'network_wait_percent': result[0].get('network_wait_percent', 0) or 0,
+                    'buffer_wait_percent': result[0].get('buffer_wait_percent', 0) or 0,
+                    'other_wait_percent': result[0].get('other_wait_percent', 0) or 0,
                 }
         except Exception as e:
             logger.warning(f"Error getting wait category percents: {e}")
-        return {'cpu_wait_percent': 0, 'io_wait_percent': 0, 'lock_wait_percent': 0, 'memory_wait_percent': 0}
+        return {
+            'total_wait_ms': 0,
+            'cpu_wait_ms': 0,
+            'io_wait_ms': 0,
+            'lock_wait_ms': 0,
+            'latch_wait_ms': 0,
+            'memory_wait_ms': 0,
+            'network_wait_ms': 0,
+            'buffer_wait_ms': 0,
+            'other_wait_ms': 0,
+            'cpu_wait_percent': 0,
+            'io_wait_percent': 0,
+            'lock_wait_percent': 0,
+            'latch_wait_percent': 0,
+            'memory_wait_percent': 0,
+            'network_wait_percent': 0,
+            'buffer_wait_percent': 0,
+            'other_wait_percent': 0,
+        }
     
     def _get_blocking_info(self, conn) -> Dict[str, int]:
         """Get blocking info: count of blocked sessions and head blocker SPID"""

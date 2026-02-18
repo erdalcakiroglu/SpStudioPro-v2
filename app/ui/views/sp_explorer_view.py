@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QMenu, QListWidgetItem,
     QDialog, QTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QProgressBar, QRadioButton, QCheckBox,
+    QStackedWidget,
     QButtonGroup
 )
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -26,6 +27,7 @@ from app.ui.components.code_editor import CodeEditor
 from app.ai.collectors import CollectorPipeline
 from app.ai.object_analyzers import normalize_object_type
 from app.ui.workers.ai_tune_worker import AITuneWorker
+from app.ui.workers.object_info_collect_worker import ObjectInfoCollectWorker
 
 logger = get_logger('ui.explorer')
 
@@ -62,21 +64,6 @@ class ObjectExplorerView(BaseView):
         main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(12, 8, 12, 8)
         main_layout.setSpacing(12)
-        
-        # Title
-        title = QLabel("Object Explorer")
-        title.setStyleSheet(f"""
-            color: {Colors.TEXT_PRIMARY}; 
-            font-size: 20px; 
-            font-weight: 700;
-            background: transparent;
-        """)
-        main_layout.addWidget(title)
-        
-        # Subtitle
-        subtitle = QLabel("Explore database objects and properties.")
-        subtitle.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 13px; background: transparent;")
-        main_layout.addWidget(subtitle)
         
         # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -121,8 +108,8 @@ class ObjectExplorerView(BaseView):
         self.db_combo = QComboBox()
         self.db_combo.setMinimumWidth(150)
         self.db_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.db_combo.setStyleSheet(ThemeStyles.combobox_style())
         self.db_combo.addItem("(None)")
-        self.db_combo.setStyleSheet(self._get_combo_style())
         self.db_combo.currentIndexChanged.connect(self._on_db_changed)
         left_layout.addWidget(self.db_combo)
         
@@ -134,6 +121,7 @@ class ObjectExplorerView(BaseView):
         self.type_combo = QComboBox()
         self.type_combo.setMinimumWidth(150)
         self.type_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.type_combo.setStyleSheet(ThemeStyles.combobox_style())
         self.type_combo.addItems([
             "All Objects",
             "Stored Procedures",
@@ -142,7 +130,6 @@ class ObjectExplorerView(BaseView):
             "Functions",
             "Tables"
         ])
-        self.type_combo.setStyleSheet(self._get_combo_style())
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         left_layout.addWidget(self.type_combo)
         
@@ -184,25 +171,7 @@ class ObjectExplorerView(BaseView):
         # Let the list expand to fill the left panel height.
         self.object_list.setMinimumHeight(0)
         self.object_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.object_list.setStyleSheet(f"""
-            QListWidget {{
-                background-color: {Colors.SURFACE};
-                border: none;
-                color: {Colors.TEXT_PRIMARY};
-                font-size: 11px;
-            }}
-            QListWidget::item {{
-                padding: 6px 8px;
-                border-radius: 4px;
-            }}
-            QListWidget::item:hover {{
-                background-color: {Colors.PRIMARY}10;
-            }}
-            QListWidget::item:selected {{
-                background-color: {Colors.PRIMARY}20;
-                color: {Colors.PRIMARY};
-            }}
-        """)
+        self.object_list.setStyleSheet(ThemeStyles.listbox_style())
         self.object_list.itemClicked.connect(self._on_object_selected)
         self.object_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.object_list.customContextMenuRequested.connect(self._show_context_menu)
@@ -231,34 +200,7 @@ class ObjectExplorerView(BaseView):
         self.details_tabs = QTabWidget()
         self.details_tabs.setObjectName("ObjectExplorerTabs")
         self.details_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.details_tabs.setStyleSheet(f"""
-            QTabWidget {{
-                background-color: transparent;
-                border: none;
-            }}
-            QTabBar::tab {{
-                background-color: #f3f4f6;
-                border: 1px solid {Colors.BORDER};
-                border-bottom: 2px solid {Colors.BORDER};
-                padding: 8px 16px;
-                margin-right: 2px;
-                font-size: 12px;
-                color: {Colors.TEXT_SECONDARY};
-            }}
-            QTabBar::tab:selected {{
-                background-color: {Colors.PRIMARY};
-                color: #ffffff;
-                border-bottom: 2px solid {Colors.PRIMARY};
-            }}
-            QTabBar::tab:hover:!selected {{
-                background-color: {Colors.BORDER};
-            }}
-            QTabWidget::pane {{
-                border: 1px solid {Colors.BORDER};
-                border-top: none;
-                background-color: {Colors.SURFACE};
-            }}
-        """)
+        self.details_tabs.setStyleSheet(ThemeStyles.tab_widget_style())
         
         # Tab 1: Source Code
         source_tab = QWidget()
@@ -266,7 +208,7 @@ class ObjectExplorerView(BaseView):
         source_layout = QVBoxLayout(source_tab)
         source_layout.setContentsMargins(12, 12, 12, 12)
         
-        self.code_editor = CodeEditor()
+        self.code_editor = CodeEditor(theme_override="light")
         self.code_editor.setReadOnly(True)
         source_layout.addWidget(self.code_editor)
         self.details_tabs.addTab(source_tab, "Source Code")
@@ -409,25 +351,7 @@ class ObjectExplorerView(BaseView):
         relations_container_layout.setSpacing(12)
         
         # ListWidget style for relations
-        relations_list_style = f"""
-            QListWidget {{
-                background-color: {Colors.SURFACE};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 6px;
-                color: {Colors.TEXT_PRIMARY};
-                font-size: 11px;
-            }}
-            QListWidget::item {{
-                padding: 6px 10px;
-            }}
-            QListWidget::item:hover {{
-                background-color: {Colors.PRIMARY}15;
-            }}
-            QListWidget::item:selected {{
-                background-color: {Colors.PRIMARY}25;
-                color: {Colors.PRIMARY};
-            }}
-        """
+        relations_list_style = ThemeStyles.listbox_style()
         
         # Depends On GroupBox
         self.depends_on_group = QGroupBox("Depends On (Objects used by this object)")
@@ -491,8 +415,116 @@ class ObjectExplorerView(BaseView):
         relations_layout.addStretch()
         
         self.details_tabs.addTab(relations_tab, "Relations")
+
+        # Tab 4: AI Tune (right side of Relations)
+        ai_tune_tab = QWidget()
+        ai_tune_tab.setStyleSheet(f"background-color: {Colors.SURFACE};")
+        ai_tune_layout = QVBoxLayout(ai_tune_tab)
+        ai_tune_layout.setContentsMargins(12, 12, 12, 12)
+        ai_tune_layout.setSpacing(10)
+
+        ai_tune_header_row = QHBoxLayout()
+        ai_tune_header = QLabel("AI Tune")
+        ai_tune_header.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
+        ai_tune_header_row.addWidget(ai_tune_header)
+        ai_tune_header_row.addStretch()
+
+        self._ai_tune_back_btn = QPushButton("Back")
+        self._ai_tune_back_btn.setVisible(False)
+        self._ai_tune_back_btn.setStyleSheet(ThemeStyles.btn_ghost(size="md"))
+        self._ai_tune_back_btn.clicked.connect(self._ai_tune_back_to_placeholder)
+        ai_tune_header_row.addWidget(self._ai_tune_back_btn)
+        ai_tune_layout.addLayout(ai_tune_header_row)
+
+        self._ai_tune_selected_object_label = QLabel("Select an object to run AI Tune.")
+        self._ai_tune_selected_object_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 12px;")
+        ai_tune_layout.addWidget(self._ai_tune_selected_object_label)
+
+        self._ai_tune_stack = QStackedWidget()
+        self._ai_tune_stack.setStyleSheet("background: transparent;")
+
+        ai_tune_placeholder = QWidget()
+        placeholder_layout = QVBoxLayout(ai_tune_placeholder)
+        placeholder_layout.setContentsMargins(0, 0, 0, 0)
+        placeholder_layout.setSpacing(10)
+
+        self._ai_tune_placeholder_help = QTextEdit()
+        self._ai_tune_placeholder_help.setReadOnly(True)
+        self._ai_tune_placeholder_help.setStyleSheet(f"""
+            QTextEdit {{
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                background-color: {Colors.SURFACE};
+                color: {Colors.TEXT_SECONDARY};
+                font-size: 11px;
+                padding: 10px;
+            }}
+        """)
+        self._ai_tune_placeholder_help.setText(
+            "AI Tune analyzes the selected object and provides optimization recommendations.\n\n"
+            "How to use:\n"
+            "1) Select an object from the left list\n"
+            "2) Open the 'AI Tune' tab\n"
+            "3) Click '▶ Start Analysis' in the panel\n\n"
+            "The AI Tune panel is prepared automatically when you select an object."
+        )
+        placeholder_layout.addWidget(self._ai_tune_placeholder_help, 1)
+
+        self._ai_tune_collect_status = QLabel("")
+        self._ai_tune_collect_status.setVisible(False)
+        self._ai_tune_collect_status.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 11px;")
+        placeholder_layout.addWidget(self._ai_tune_collect_status)
+
+        self._ai_tune_collect_progress = QProgressBar()
+        self._ai_tune_collect_progress.setVisible(False)
+        self._ai_tune_collect_progress.setRange(0, 100)
+        self._ai_tune_collect_progress.setValue(0)
+        placeholder_layout.addWidget(self._ai_tune_collect_progress)
+
+        self._ai_tune_collect_log = QTextEdit()
+        self._ai_tune_collect_log.setVisible(False)
+        self._ai_tune_collect_log.setReadOnly(True)
+        self._ai_tune_collect_log.setStyleSheet(f"""
+            QTextEdit {{
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                background-color: {Colors.SURFACE};
+                color: {Colors.TEXT_SECONDARY};
+                font-size: 11px;
+                padding: 10px;
+                font-family: 'Consolas', 'Courier New', monospace;
+            }}
+        """)
+        self._ai_tune_collect_log.setFixedHeight(160)
+        placeholder_layout.addWidget(self._ai_tune_collect_log)
+
+        self._ai_tune_prepare_btn = QPushButton("🤖  Prepare AI Tune")
+        self._ai_tune_prepare_btn.setEnabled(False)
+        self._ai_tune_prepare_btn.setVisible(False)
+        self._ai_tune_prepare_btn.setStyleSheet(ThemeStyles.btn_secondary(size="lg"))
+        self._ai_tune_prepare_btn.clicked.connect(self._run_ai_tune_for_current_selection)
+        placeholder_layout.addWidget(self._ai_tune_prepare_btn, 0, Qt.AlignmentFlag.AlignLeft)
+
+        self._ai_tune_embedded_host = QWidget()
+        embedded_layout = QVBoxLayout(self._ai_tune_embedded_host)
+        embedded_layout.setContentsMargins(0, 0, 0, 0)
+        embedded_layout.setSpacing(0)
+
+        self._ai_tune_stack.addWidget(ai_tune_placeholder)
+        self._ai_tune_stack.addWidget(self._ai_tune_embedded_host)
+        ai_tune_layout.addWidget(self._ai_tune_stack, 1)
+
+        self._ai_tune_embedded_dialog = None
+        self._ai_tune_collect_worker = None
+        self._ai_tune_collect_key = None
+        self._ai_tune_collect_pending = None
+
+        self.details_tabs.addTab(ai_tune_tab, "AI Tune")
+        self._ai_tune_tab_index = self.details_tabs.indexOf(ai_tune_tab)
+        self._ai_tune_prepared_key = None
         
         right_layout.addWidget(self.details_tabs)
+        self.details_tabs.currentChanged.connect(self._on_details_tab_changed)
         
         # Add panels to splitter
         splitter.addWidget(left_panel)
@@ -507,10 +539,6 @@ class ObjectExplorerView(BaseView):
         main_layout.addWidget(splitter, stretch=1)
         self._main_layout.addWidget(main_widget)
     
-    def _get_combo_style(self) -> str:
-        """Get ComboBox style - GUI-05 style"""
-        return ThemeStyles.combobox_style()
-
     def initialize(self) -> None:
         """View aktif olduğunda verileri yükle"""
         super().initialize()
@@ -672,9 +700,291 @@ class ObjectExplorerView(BaseView):
 
         logger.info(f"Object selected: {full_name} in {db_name}")
         self._selected_object_type_code = type_code or ""
+        if hasattr(self, "_ai_tune_selected_object_label"):
+            self._ai_tune_selected_object_label.setText(f"Selected: {db_name}.{full_name}")
+        if hasattr(self, "_ai_tune_prepare_btn"):
+            self._ai_tune_prepare_btn.setEnabled(True)
         self._load_object_source(db_name, full_name)
         self._load_object_stats(db_name, full_name)
         self._load_object_relations(db_name, full_name)
+        self._ai_tune_maybe_prepare_for_current_selection()
+
+    def _run_ai_tune_for_current_selection(self) -> None:
+        """AI Tune tab: prepare AI Tune panel for the currently selected object."""
+        current_item = self.object_list.currentItem()
+        if current_item is None:
+            return
+        self._ai_tune_object(current_item)
+
+    def _on_details_tab_changed(self, index: int) -> None:
+        """Auto-prepare AI Tune panel when the AI Tune tab is opened."""
+        if not hasattr(self, "_ai_tune_tab_index"):
+            return
+        if index != getattr(self, "_ai_tune_tab_index", -1):
+            return
+        self._ai_tune_maybe_prepare_for_current_selection()
+
+    def _ai_tune_maybe_prepare_for_current_selection(self) -> None:
+        """Ensure the AI Tune tab has the embedded panel prepared for current selection."""
+        current_item = self.object_list.currentItem()
+        if current_item is None:
+            return
+
+        db_name = self.db_combo.currentText()
+        full_name, type_code = self._get_item_object_info(current_item)
+        if not db_name or db_name == "(None)" or not full_name:
+            return
+
+        prepared_key = f"{db_name}|{full_name}|{type_code or ''}"
+        already_prepared = (
+            prepared_key == getattr(self, "_ai_tune_prepared_key", None)
+            and getattr(self, "_ai_tune_embedded_dialog", None) is not None
+            and hasattr(self, "_ai_tune_stack")
+            and self._ai_tune_stack.currentIndex() == 1
+        )
+        if already_prepared:
+            return
+
+        # Only auto-prepare when user is on AI Tune tab, so object clicks stay snappy.
+        if self.details_tabs.currentIndex() != getattr(self, "_ai_tune_tab_index", -1):
+            return
+
+        self._start_ai_tune_preparation(db_name, full_name, type_code=type_code, activate_tab=False)
+
+    def _clear_ai_tune_embedded_dialog(self) -> None:
+        if getattr(self, "_ai_tune_embedded_dialog", None) is None:
+            return
+        dlg = self._ai_tune_embedded_dialog
+        self._ai_tune_embedded_dialog = None
+        try:
+            dlg.setParent(None)
+            dlg.deleteLater()
+        except Exception:
+            pass
+
+    def _set_ai_tune_collection_ui(self, db_name: str, full_name: str, activate_tab: bool) -> None:
+        if activate_tab:
+            try:
+                self.details_tabs.setCurrentIndex(getattr(self, "_ai_tune_tab_index", -1))
+            except Exception:
+                pass
+
+        if hasattr(self, "_ai_tune_stack"):
+            self._ai_tune_stack.setCurrentIndex(0)
+        if hasattr(self, "_ai_tune_back_btn"):
+            self._ai_tune_back_btn.setVisible(False)
+        if hasattr(self, "_ai_tune_prepare_btn"):
+            self._ai_tune_prepare_btn.setEnabled(False)
+
+        if hasattr(self, "_ai_tune_selected_object_label"):
+            self._ai_tune_selected_object_label.setText(f"Selected: {db_name}.{full_name} (collecting context...)")
+
+        if hasattr(self, "_ai_tune_collect_status"):
+            self._ai_tune_collect_status.setVisible(True)
+            self._ai_tune_collect_status.setText("📦 Starting data collection...")
+        if hasattr(self, "_ai_tune_collect_progress"):
+            self._ai_tune_collect_progress.setVisible(True)
+            self._ai_tune_collect_progress.setValue(0)
+        if hasattr(self, "_ai_tune_collect_log"):
+            self._ai_tune_collect_log.setVisible(True)
+            self._ai_tune_collect_log.setPlainText("")
+
+    def _append_ai_tune_collect_log(self, text: str) -> None:
+        if not hasattr(self, "_ai_tune_collect_log"):
+            return
+        try:
+            current = self._ai_tune_collect_log.toPlainText()
+            lines = current.splitlines() if current else []
+            lines.append(str(text))
+            lines = lines[-80:]
+            self._ai_tune_collect_log.setPlainText("\n".join(lines))
+            cursor = self._ai_tune_collect_log.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self._ai_tune_collect_log.setTextCursor(cursor)
+        except Exception:
+            pass
+
+    def _start_ai_tune_preparation(
+        self,
+        db_name: str,
+        full_name: str,
+        type_code: str = "",
+        activate_tab: bool = False,
+    ) -> None:
+        db_name = str(db_name or "")
+        full_name = str(full_name or "")
+        type_code = str(type_code or "")
+        if not db_name or db_name == "(None)" or not full_name:
+            return
+
+        prepared_key = f"{db_name}|{full_name}|{type_code or ''}"
+
+        already_prepared = (
+            prepared_key == getattr(self, "_ai_tune_prepared_key", None)
+            and getattr(self, "_ai_tune_embedded_dialog", None) is not None
+            and hasattr(self, "_ai_tune_stack")
+        )
+        if already_prepared:
+            if activate_tab:
+                try:
+                    self.details_tabs.setCurrentIndex(getattr(self, "_ai_tune_tab_index", -1))
+                except Exception:
+                    pass
+            try:
+                self._ai_tune_stack.setCurrentIndex(1)
+            except Exception:
+                pass
+            if hasattr(self, "_ai_tune_back_btn"):
+                self._ai_tune_back_btn.setVisible(True)
+            if hasattr(self, "_ai_tune_prepare_btn"):
+                self._ai_tune_prepare_btn.setEnabled(False)
+            return
+
+        running_worker = getattr(self, "_ai_tune_collect_worker", None)
+        try:
+            is_running = running_worker is not None and running_worker.isRunning()
+        except Exception:
+            is_running = False
+
+        if is_running:
+            self._ai_tune_collect_pending = (db_name, full_name, type_code, activate_tab)
+            self._ai_tune_collect_key = prepared_key
+            self._set_ai_tune_collection_ui(db_name, full_name, activate_tab=activate_tab)
+            if hasattr(self, "_ai_tune_collect_progress"):
+                try:
+                    # Indeterminate: waiting for the active worker to finish.
+                    self._ai_tune_collect_progress.setRange(0, 0)
+                except Exception:
+                    pass
+            if hasattr(self, "_ai_tune_collect_status"):
+                self._ai_tune_collect_status.setText("⏳ Waiting for current collection to finish...")
+            self._append_ai_tune_collect_log("⏳ Collection already running; queued latest selection...")
+            return
+
+        self._ai_tune_collect_key = prepared_key
+        self._ai_tune_collect_pending = None
+
+        self._clear_ai_tune_embedded_dialog()
+        self._set_ai_tune_collection_ui(db_name, full_name, activate_tab=activate_tab)
+        if hasattr(self, "_ai_tune_collect_progress"):
+            try:
+                self._ai_tune_collect_progress.setRange(0, 100)
+                self._ai_tune_collect_progress.setValue(0)
+            except Exception:
+                pass
+
+        conn_mgr = get_connection_manager()
+        active_conn = conn_mgr.active_connection
+        if not active_conn or not active_conn.is_connected:
+            self._append_ai_tune_collect_log("❌ No active database connection.")
+            if hasattr(self, "_ai_tune_collect_status"):
+                self._ai_tune_collect_status.setText("❌ No active database connection.")
+            return
+
+        worker = ObjectInfoCollectWorker(active_conn, db_name, full_name, parent=self)
+        self._ai_tune_collect_worker = worker
+
+        def _same_request() -> bool:
+            return prepared_key == getattr(self, "_ai_tune_collect_key", None)
+
+        def _finalize_worker_state() -> None:
+            try:
+                if self._ai_tune_collect_worker is worker:
+                    self._ai_tune_collect_worker = None
+            except Exception:
+                pass
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+
+        def _maybe_run_pending() -> None:
+            pending = getattr(self, "_ai_tune_collect_pending", None)
+            self._ai_tune_collect_pending = None
+            if isinstance(pending, tuple) and len(pending) == 4:
+                p_db, p_full, p_type, p_activate = pending
+                self._start_ai_tune_preparation(p_db, p_full, type_code=p_type, activate_tab=bool(p_activate))
+
+        def _on_progress(pct: int, msg: str) -> None:
+            if not _same_request():
+                return
+            if hasattr(self, "_ai_tune_collect_progress"):
+                try:
+                    if self._ai_tune_collect_progress.minimum() == 0 and self._ai_tune_collect_progress.maximum() == 0:
+                        self._ai_tune_collect_progress.setRange(0, 100)
+                except Exception:
+                    pass
+                self._ai_tune_collect_progress.setValue(int(pct))
+            if hasattr(self, "_ai_tune_collect_status"):
+                self._ai_tune_collect_status.setText(str(msg))
+
+        def _on_log(line: str) -> None:
+            if not _same_request():
+                return
+            self._append_ai_tune_collect_log(line)
+
+        def _on_finished(info: dict) -> None:
+            if not _same_request():
+                _finalize_worker_state()
+                _maybe_run_pending()
+                return
+
+            resolved_type_code = str(type_code or self._selected_object_type_code or "").strip().upper()
+            object_info = dict(info or {})
+            object_info["object_type_code"] = resolved_type_code
+            object_info["object_type"] = normalize_object_type(
+                resolved_type_code,
+                source_code=str(object_info.get("source_code", "") or ""),
+            )
+            if isinstance(object_info.get("object_resolution"), dict):
+                object_info["object_resolution"]["object_type"] = object_info["object_type"]
+                object_info["object_resolution"]["object_type_code"] = resolved_type_code
+
+            self._ai_tune_prepared_key = prepared_key
+            _finalize_worker_state()
+
+            self._show_ai_tune_panel(object_info, activate_tab=activate_tab)
+            _maybe_run_pending()
+
+        def _on_error(err: str) -> None:
+            if not _same_request():
+                _finalize_worker_state()
+                _maybe_run_pending()
+                return
+            msg = f"❌ Collection failed: {err}"
+            self._append_ai_tune_collect_log(msg)
+            if hasattr(self, "_ai_tune_collect_status"):
+                self._ai_tune_collect_status.setText(msg)
+            _finalize_worker_state()
+            _maybe_run_pending()
+
+        worker.progress.connect(_on_progress)
+        worker.log.connect(_on_log)
+        worker.finished.connect(_on_finished)
+        worker.error.connect(_on_error)
+        worker.start()
+
+    def _ai_tune_back_to_placeholder(self) -> None:
+        """Return from embedded AI Tune panel back to placeholder view."""
+        if hasattr(self, "_ai_tune_stack"):
+            self._ai_tune_stack.setCurrentIndex(0)
+        if hasattr(self, "_ai_tune_back_btn"):
+            self._ai_tune_back_btn.setVisible(False)
+        if hasattr(self, "_ai_tune_prepare_btn"):
+            self._ai_tune_prepare_btn.setEnabled(self.object_list.currentItem() is not None)
+
+        if getattr(self, "_ai_tune_embedded_dialog", None) is not None:
+            dlg = self._ai_tune_embedded_dialog
+            self._ai_tune_embedded_dialog = None
+            try:
+                dlg.setParent(None)
+                dlg.deleteLater()
+            except Exception:
+                pass
+
+        if hasattr(self, "_ai_tune_selected_object_label"):
+            if self.object_list.currentItem() is None:
+                self._ai_tune_selected_object_label.setText("Select an object to run AI Tune.")
 
     @staticmethod
     def _get_item_object_info(item) -> tuple[str, str]:
@@ -1279,7 +1589,7 @@ class ObjectExplorerView(BaseView):
         self.details_tabs.setCurrentIndex(2)
     
     def _ai_tune_object(self, item) -> None:
-        """AI ile nesneyi optimize et"""
+        """Open AI Tune tab and load the embedded AI Tune panel for the selected object."""
         full_name, type_code = self._get_item_object_info(item)
         if not full_name:
             return
@@ -1289,10 +1599,58 @@ class ObjectExplorerView(BaseView):
         if not db_name or db_name == "(None)":
             return
         
-        object_info = self._collect_object_info(db_name, full_name, type_code=type_code)
-        
-        dialog = AITuneDialog(object_info, self)
-        dialog.exec()
+        self._start_ai_tune_preparation(db_name, full_name, type_code=type_code, activate_tab=True)
+
+    def _show_ai_tune_panel(self, object_info: dict, activate_tab: bool = True) -> None:
+        """Render AI Tune dialog UI inside the AI Tune tab (no popup)."""
+        if (
+            activate_tab
+            and hasattr(self, "_ai_tune_tab_index")
+            and isinstance(self._ai_tune_tab_index, int)
+            and self._ai_tune_tab_index >= 0
+        ):
+            self.details_tabs.setCurrentIndex(self._ai_tune_tab_index)
+
+        if hasattr(self, "_ai_tune_selected_object_label"):
+            db_name = str(object_info.get("database", "") or "")
+            full_name = str(object_info.get("full_name", "") or "")
+            if db_name and full_name:
+                self._ai_tune_selected_object_label.setText(f"Selected: {db_name}.{full_name}")
+
+        # Clear previous embedded UI (if any)
+        host = getattr(self, "_ai_tune_embedded_host", None)
+        if host is None:
+            return
+        layout = host.layout()
+        if layout is not None:
+            while layout.count():
+                item = layout.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    try:
+                        w.setParent(None)
+                        w.deleteLater()
+                    except Exception:
+                        pass
+
+        self._ai_tune_embedded_dialog = AITuneDialog(object_info, host, embedded=True)
+        self._ai_tune_embedded_dialog.setObjectName("AITuneEmbedded")
+        try:
+            self._ai_tune_embedded_dialog.setWindowFlags(Qt.WindowType.Widget)
+        except Exception:
+            pass
+        self._ai_tune_embedded_dialog.setMinimumSize(0, 0)
+        self._ai_tune_embedded_dialog.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        if layout is not None:
+            layout.addWidget(self._ai_tune_embedded_dialog, 1)
+
+        if hasattr(self, "_ai_tune_stack"):
+            self._ai_tune_stack.setCurrentIndex(1)
+        if hasattr(self, "_ai_tune_back_btn"):
+            self._ai_tune_back_btn.setVisible(True)
+        if hasattr(self, "_ai_tune_prepare_btn"):
+            self._ai_tune_prepare_btn.setEnabled(False)
     
     def _collect_object_info(self, db_name: str, full_name: str, type_code: str = "") -> dict:
         """
@@ -1326,6 +1684,7 @@ class ObjectExplorerView(BaseView):
             'plan_meta': {},
             'plan_insights': {},
             'existing_indexes': [],
+            'view_metadata': {},
             'parameter_sniffing': {},
             'historical_trend': {},
             'memory_grants': {},
@@ -1394,6 +1753,7 @@ class ObjectExplorerView(BaseView):
             'plan_meta': {},
             'plan_insights': {},
             'existing_indexes': [],
+            'view_metadata': {},
             'parameter_sniffing': {},
             'historical_trend': {},
             'memory_grants': {},
@@ -2627,9 +2987,10 @@ class AITuneDialog(QDialog):
     - Professional HTML report generation
     """
     
-    def __init__(self, object_info: dict, parent=None):
+    def __init__(self, object_info: dict, parent=None, embedded: bool = False):
         super().__init__(parent)
         self.object_info = object_info
+        self._embedded = bool(embedded)
         self._optimized_code = ""
         self._log_entries = []
         self._collection_log_added = False
@@ -2646,57 +3007,81 @@ class AITuneDialog(QDialog):
         self._set_idle_state()
     
     def _setup_ui(self):
-        self.setWindowTitle(f"AI Analysis: {self.object_info.get('full_name', '')}")
-        self.setMinimumSize(1000, 700)
-        self.resize(1200, 800)
-        
-        self.setStyleSheet(f"""
+        if not self._embedded:
+            self.setWindowTitle(f"AI Analysis: {self.object_info.get('full_name', '')}")
+            self.setMinimumSize(1000, 700)
+            self.resize(1200, 800)
+
+        base_bg = Colors.SURFACE if self._embedded else Colors.BACKGROUND
+        outer_bg = "transparent" if self._embedded else base_bg
+
+        self.setStyleSheet(
+            f"""
             QDialog {{
-                background-color: {Colors.BACKGROUND};
+                background-color: {outer_bg};
             }}
             QTextEdit {{
                 background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 12px;
+                border-radius: 10px;
+                padding: 10px;
                 color: {Colors.TEXT_PRIMARY};
                 font-size: 12px;
             }}
             QPushButton {{
-                background-color: {Colors.PRIMARY};
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
+                background-color: {Colors.SURFACE};
+                color: {Colors.TEXT_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 8px 14px;
                 font-weight: 600;
-                font-size: 12px;
+                font-size: 11px;
             }}
             QPushButton:hover {{
-                background-color: {Colors.PRIMARY_HOVER};
+                background-color: {Colors.BACKGROUND};
             }}
             QPushButton:disabled {{
-                background-color: {Colors.BORDER};
+                background-color: {Colors.BACKGROUND};
+                border-color: {Colors.BORDER};
                 color: {Colors.TEXT_MUTED};
             }}
-            QPushButton#closeBtn {{
-                background-color: {Colors.SURFACE};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
+            QPushButton#startBtn {{
+                background-color: {Colors.PRIMARY};
+                color: white;
+                border: 1px solid {Colors.PRIMARY};
+            }}
+            QPushButton#startBtn:hover {{
+                background-color: {Colors.PRIMARY_HOVER};
+                border-color: {Colors.PRIMARY_HOVER};
+            }}
+            QPushButton#startBtn:disabled {{
+                background-color: {Colors.BORDER};
+                border-color: {Colors.BORDER};
+                color: {Colors.TEXT_MUTED};
             }}
             QPushButton#closeBtn:hover {{
-                background-color: #F1F5F9;
+                background-color: {Colors.BACKGROUND};
             }}
-        """)
+            {ThemeStyles.scrollbar_style()}
+            """
+        )
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        if self._embedded:
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(10)
+        else:
+            layout.setContentsMargins(20, 20, 20, 20)
+            layout.setSpacing(12)
         
         # Header
         header_layout = QHBoxLayout()
         
         title = QLabel(f"🤖 AI Performance Analysis: {self.object_info.get('full_name', '')}")
-        title.setStyleSheet(f"color: {Colors.SECONDARY}; font-size: 18px; font-weight: bold;")
+        if self._embedded:
+            title.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 15px; font-weight: 700;")
+        else:
+            title.setStyleSheet(f"color: {Colors.SECONDARY}; font-size: 18px; font-weight: bold;")
         header_layout.addWidget(title)
         
         header_layout.addStretch()
@@ -2721,7 +3106,7 @@ class AITuneDialog(QDialog):
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
-        self._progress_bar.setFixedHeight(8)
+        self._progress_bar.setFixedHeight(6 if self._embedded else 8)
         self._progress_bar.setTextVisible(False)
         self._progress_bar.setStyleSheet(f"""
             QProgressBar {{
@@ -2742,8 +3127,8 @@ class AITuneDialog(QDialog):
         info_frame.setStyleSheet(f"""
             QFrame {{
                 background-color: {Colors.SURFACE};
-                border: 1px dashed {Colors.BORDER};
-                border-radius: 8px;
+                border: 1px solid {Colors.BORDER};
+                border-radius: 10px;
             }}
         """)
         info_layout = QHBoxLayout(info_frame)
@@ -2761,7 +3146,7 @@ class AITuneDialog(QDialog):
             QFrame {{
                 background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
+                border-radius: 10px;
             }}
         """)
         result_layout = QVBoxLayout(result_container)
@@ -2792,7 +3177,7 @@ class AITuneDialog(QDialog):
             QFrame {{
                 background-color: #1e293b;
                 border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
+                border-radius: 10px;
             }}
         """)
         log_layout = QVBoxLayout(log_container)
@@ -2903,6 +3288,7 @@ class AITuneDialog(QDialog):
         btn_layout = QHBoxLayout()
 
         self._start_btn = QPushButton("▶ Start Analysis")
+        self._start_btn.setObjectName("startBtn")
         self._start_btn.clicked.connect(self._start_analysis)
         btn_layout.addWidget(self._start_btn)
 
@@ -2931,6 +3317,9 @@ class AITuneDialog(QDialog):
         self._close_btn.setObjectName("closeBtn")
         self._close_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self._close_btn)
+
+        if self._embedded:
+            self._close_btn.setVisible(False)
         
         layout.addLayout(btn_layout)
         
@@ -3098,6 +3487,21 @@ The AI will provide detailed optimization recommendations based on all collected
             self._add_log("⚠️ Validation warnings:")
             for w in warnings[:3]:
                 self._add_log(f"  - {w}")
+
+        evidence = confidence_dict.get("evidence", {}) if isinstance(confidence_dict.get("evidence", {}), dict) else {}
+        if evidence:
+            query_ev = evidence.get("query")
+            plan_ev = evidence.get("plan")
+            index_ev = evidence.get("index")
+            self._add_log(
+                f"🔎 Confidence breakdown: Query={query_ev}%, Plan={plan_ev}%, Index={index_ev}%"
+            )
+            try:
+                self._confidence_badge.setToolTip(
+                    f"Query evidence: {query_ev}%\nPlan evidence: {plan_ev}%\nIndex evidence: {index_ev}%"
+                )
+            except Exception:
+                pass
 
     def _on_request_payload_ready(self, payload: dict):
         """Store latest LLM request payload for manual export."""
@@ -3303,6 +3707,15 @@ The AI will provide detailed optimization recommendations based on all collected
         
         if not markdown_text:
             return ""
+
+        markdown_text = html.unescape(markdown_text)
+
+        # Replace hash-like identifiers in user-facing labels.
+        markdown_text = re.sub(
+            r'(?i)(\b(?:table|index|object)\s*:\s*)([a-f0-9]{16,64})\b',
+            r'\1(unresolved)',
+            markdown_text,
+        )
         
         # Pre-process: Remove escape backslashes (e.g., "1\." -> "1.")
         markdown_text = re.sub(r'\\([.#*_\[\]()])', r'\1', markdown_text)
@@ -3314,24 +3727,70 @@ The AI will provide detailed optimization recommendations based on all collected
         code_language = ""
         in_list = False
         list_type = None
+        list_item_open = False
+        nested_list_type = None
+        nested_item_open = False
+        pending_list_blank = False
         in_table = False
         table_rows = []
         h2_count = 0
+
+        def _close_nested_list():
+            nonlocal nested_list_type, nested_item_open
+            if nested_item_open:
+                html_parts.append("</li>")
+                nested_item_open = False
+            if nested_list_type:
+                html_parts.append(f"</{nested_list_type}>")
+                nested_list_type = None
+
+        def _close_list():
+            nonlocal in_list, list_type, list_item_open
+            if not in_list:
+                return
+            _close_nested_list()
+            if list_item_open:
+                html_parts.append("</li>")
+                list_item_open = False
+            html_parts.append(f"</{list_type}>")
+            in_list = False
+            list_type = None
+
+        def _is_ordered_list(line_text: str) -> bool:
+            return bool(re.match(r'^\s*\d+[.)]\s+', line_text))
+
+        def _is_unordered_list(line_text: str) -> bool:
+            stripped = line_text.strip()
+            return stripped.startswith('- ') or stripped.startswith('* ')
+
+        def _is_header(line_text: str) -> bool:
+            return line_text.startswith('#')
+
+        def _is_hr(line_text: str) -> bool:
+            return line_text.strip() in ['---', '***', '___']
         
         i = 0
         while i < len(lines):
             line = lines[i]
+
+            if pending_list_blank and line.strip():
+                if _is_header(line) or _is_hr(line):
+                    if in_list:
+                        _close_list()
+                pending_list_blank = False
             
             # Code block start/end
             if line.strip().startswith('```'):
                 if not in_code_block:
+                    if in_list and not list_item_open:
+                        _close_list()
                     in_code_block = True
                     code_language = line.strip()[3:].strip()
                     code_block_content = []
                 else:
                     in_code_block = False
                     code_text = '\n'.join(code_block_content)
-                    code_text = html.escape(code_text)
+                    code_text = html.escape(code_text, quote=False)
                     html_parts.append(f'<pre><code class="language-{code_language}">{code_text}</code></pre>')
                 i += 1
                 continue
@@ -3348,10 +3807,8 @@ The AI will provide detailed optimization recommendations based on all collected
             if is_table_row or (in_table and is_separator):
                 if not in_table:
                     # Close any open list
-                    if in_list:
-                        html_parts.append(f'</{list_type}>')
-                        in_list = False
-                        list_type = None
+                    if in_list and not list_item_open:
+                        _close_list()
                     in_table = True
                     table_rows = []
                 table_rows.append(line)
@@ -3366,68 +3823,96 @@ The AI will provide detailed optimization recommendations based on all collected
             
             # Headers
             if line.startswith('######'):
+                if in_list:
+                    _close_list()
                 html_parts.append(f'<h6>{self._inline_markdown(line[6:].strip())}</h6>')
             elif line.startswith('#####'):
+                if in_list:
+                    _close_list()
                 html_parts.append(f'<h5>{self._inline_markdown(line[5:].strip())}</h5>')
             elif line.startswith('####'):
+                if in_list:
+                    _close_list()
                 html_parts.append(f'<h4>{self._inline_markdown(line[4:].strip())}</h4>')
             elif line.startswith('###'):
                 if in_list:
-                    html_parts.append(f'</{list_type}>')
-                    in_list = False
-                    list_type = None
+                    _close_list()
                 html_parts.append(f'<h3>{self._inline_markdown(line[3:].strip())}</h3>')
             elif line.startswith('##'):
                 if in_list:
-                    html_parts.append(f'</{list_type}>')
-                    in_list = False
-                    list_type = None
+                    _close_list()
                 h2_count += 1
                 if h2_count > 1:
                     html_parts.append('<hr>')
                 html_parts.append(f'<h2>{self._inline_markdown(line[2:].strip())}</h2>')
             elif line.startswith('#'):
+                if in_list:
+                    _close_list()
                 html_parts.append(f'<h1>{self._inline_markdown(line[1:].strip())}</h1>')
             
             # Horizontal rule
-            elif line.strip() in ['---', '***', '___']:
+            elif _is_hr(line):
                 html_parts.append('<hr>')
             
             # Ordered list
-            elif re.match(r'^\d+\.\s+', line):
+            elif _is_ordered_list(line):
                 if not in_list or list_type != 'ol':
                     if in_list:
-                        html_parts.append(f'</{list_type}>')
+                        _close_list()
                     html_parts.append('<ol>')
                     in_list = True
                     list_type = 'ol'
-                content = re.sub(r'^\d+\.\s+', '', line)
-                html_parts.append(f'<li>{self._inline_markdown(content)}</li>')
+                    list_item_open = False
+                # New top-level item closes nested list and previous item
+                if nested_list_type:
+                    _close_nested_list()
+                if list_item_open:
+                    html_parts.append("</li>")
+                content = re.sub(r'^\s*\d+[.)]\s+', '', line)
+                html_parts.append(f'<li>{self._inline_markdown(content)}')
+                list_item_open = True
             
             # Unordered list
-            elif line.strip().startswith('- ') or line.strip().startswith('* '):
-                if not in_list or list_type != 'ul':
-                    if in_list:
-                        html_parts.append(f'</{list_type}>')
-                    html_parts.append('<ul>')
-                    in_list = True
-                    list_type = 'ul'
-                content = line.strip()[2:]
-                html_parts.append(f'<li>{self._inline_markdown(content)}</li>')
+            elif _is_unordered_list(line):
+                # Nested list under current list item when list types differ.
+                if in_list and list_type != 'ul' and list_item_open:
+                    content = line.strip()[2:]
+                    if nested_list_type != 'ul':
+                        _close_nested_list()
+                        html_parts.append('<ul>')
+                        nested_list_type = 'ul'
+                        nested_item_open = False
+                    if nested_item_open:
+                        html_parts.append("</li>")
+                    html_parts.append(f'<li>{self._inline_markdown(content)}')
+                    nested_item_open = True
+                else:
+                    if not in_list or list_type != 'ul':
+                        if in_list:
+                            _close_list()
+                        html_parts.append('<ul>')
+                        in_list = True
+                        list_type = 'ul'
+                        list_item_open = False
+                    if nested_list_type:
+                        _close_nested_list()
+                    if list_item_open:
+                        html_parts.append("</li>")
+                    content = line.strip()[2:]
+                    html_parts.append(f'<li>{self._inline_markdown(content)}')
+                    list_item_open = True
             
             # Empty line
             elif line.strip() == '':
-                if in_list:
-                    html_parts.append(f'</{list_type}>')
-                    in_list = False
-                    list_type = None
+                if in_list and list_item_open:
+                    pending_list_blank = True
+                elif in_list:
+                    _close_list()
             
             # Regular paragraph
             else:
                 if in_list:
-                    html_parts.append(f'</{list_type}>')
-                    in_list = False
-                    list_type = None
+                    _close_list()
                 if line.strip():
                     html_parts.append(f'<p>{self._inline_markdown(line)}</p>')
             
@@ -3435,11 +3920,19 @@ The AI will provide detailed optimization recommendations based on all collected
         
         # Close any open elements
         if in_list:
-            html_parts.append(f'</{list_type}>')
+            _close_list()
         if in_table and table_rows:
             html_parts.append(self._render_table(table_rows))
-        
-        return '\n'.join(html_parts)
+
+        # Collapse consecutive <hr> tags
+        collapsed = []
+        for part in html_parts:
+            if part == "<hr>" and collapsed and collapsed[-1] == "<hr>":
+                continue
+            collapsed.append(part)
+        html_output = '\n'.join(collapsed)
+        html_output = re.sub(r'(?:<hr>\s*){2,}', '<hr>\n', html_output)
+        return html_output
     
     def _render_table(self, rows: list) -> str:
         """Render markdown table rows to HTML table"""
@@ -3491,28 +3984,43 @@ The AI will provide detailed optimization recommendations based on all collected
         import re
         import html
         
-        # Escape HTML first
-        text = html.escape(text)
+        if text is None:
+            return ""
+
+        # Extract inline code spans first to avoid formatting inside code.
+        code_spans = []
+
+        def _code_repl(match: re.Match) -> str:
+            code_spans.append(match.group(1))
+            return f"@@CODE{len(code_spans) - 1}@@"
+
+        text = re.sub(r'`([^`]+)`', _code_repl, str(text))
+
+        # Escape HTML (keep quotes as-is for readability).
+        text = html.escape(text, quote=False)
         
         # Bold: **text** or __text__
         text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-        text = re.sub(r'__(.+?)__', r'<strong>\1</strong>', text)
+        text = re.sub(r'(?<!\w)__(.+?)__(?!\w)', r'<strong>\1</strong>', text)
         
         # Italic: *text* or _text_
-        text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
-        text = re.sub(r'_(.+?)_', r'<em>\1</em>', text)
-        
-        # Inline code: `code`
-        text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+        text = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'<em>\1</em>', text)
+        text = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'<em>\1</em>', text)
         
         # Links: [text](url)
         text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
+
+        # Restore inline code spans
+        for idx, code in enumerate(code_spans):
+            safe_code = html.escape(code, quote=False)
+            text = text.replace(f"@@CODE{idx}@@", f"<code>{safe_code}</code>")
         
         return text
     
     def _generate_html_report(self) -> str:
         """Generate professional HTML report with header information"""
         from datetime import datetime
+        import re
         
         object_name = self.object_info.get('full_name', 'Unknown')
         database = self.object_info.get('database', 'Unknown')
@@ -3550,10 +4058,26 @@ The AI will provide detailed optimization recommendations based on all collected
         completeness_score = completeness.get('completeness_score', 0)
         
         # Convert markdown to proper HTML
-        body_content = self._markdown_to_html(self._get_report_markdown())
+        report_markdown = self._get_report_markdown()
+        if not re.search(r'^\s*#{1,6}\s+.*Executive Summary', report_markdown or "", re.IGNORECASE | re.MULTILINE):
+            fallback_lines = ["## Executive Summary"]
+            if self._last_confidence:
+                summary = str(self._last_confidence.get("summary", "") or "").strip()
+                if summary:
+                    fallback_lines.append(summary)
+                warnings = self._last_confidence.get("warnings", [])
+                if isinstance(warnings, list) and warnings:
+                    fallback_lines.append("")
+                    fallback_lines.append("Notes:")
+                    for w in warnings[:3]:
+                        fallback_lines.append(f"- {w}")
+            if len(fallback_lines) == 1:
+                fallback_lines.append("Summary not available from the model output.")
+            report_markdown = "\n".join(fallback_lines) + "\n\n" + (report_markdown or "")
+        body_content = self._markdown_to_html(report_markdown)
         
         html_template = f'''<!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -3972,4 +4496,3 @@ The AI will provide detailed optimization recommendations based on all collected
 </html>'''
         
         return html_template
-

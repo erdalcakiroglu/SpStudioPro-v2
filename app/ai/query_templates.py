@@ -20,9 +20,9 @@ class QueryTemplate:
     description: str
     category: str
     sql: str
-    parameters: List[str] = None
-    tags: List[str] = None
-    intent: Intent = None
+    parameters: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    intent: Optional[Intent] = None
     
     def __post_init__(self):
         if self.parameters is None:

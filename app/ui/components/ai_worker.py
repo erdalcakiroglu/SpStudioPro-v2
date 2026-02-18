@@ -10,7 +10,12 @@ class AIAnalysisWorker(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(str, str)  # (stage, message)
     
-    def __init__(self, query_stats: QueryStats = None, plan_xml: Optional[str] = None, context: Dict[str, Any] = None):
+    def __init__(
+        self,
+        query_stats: Optional[QueryStats] = None,
+        plan_xml: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__()
         self.query_stats = query_stats
         self.plan_xml = plan_xml

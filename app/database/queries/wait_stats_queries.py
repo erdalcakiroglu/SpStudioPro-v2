@@ -2,9 +2,10 @@
 Wait Statistics Queries - SQL Server wait analysis
 """
 
+import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict
+from typing import Dict, List, Tuple
 
 
 class WaitCategory(Enum):
@@ -230,7 +231,7 @@ class WaitStatsQueries:
       AND r.session_id <> @@SPID
     ORDER BY r.wait_time DESC
     """
-    
+
     # Signal vs Resource wait ratio
     SIGNAL_VS_RESOURCE = f"""
     SELECT 
@@ -272,10 +273,140 @@ class WaitStatsQueries:
     ORDER BY spins DESC
     """
 
+    # Historical wait trend (Query Store, SQL Server 2017+)
+    HISTORICAL_WAIT_TREND = """
+    WITH daily AS (
+        SELECT
+            CAST(rsi.start_time AS DATE) AS trend_date,
+            ws.wait_category_desc AS wait_category,
+            SUM(ws.total_query_wait_time_ms) AS total_wait_ms
+        FROM sys.query_store_wait_stats ws
+        JOIN sys.query_store_runtime_stats_interval rsi
+            ON ws.runtime_stats_interval_id = rsi.runtime_stats_interval_id
+        WHERE rsi.start_time >= DATEADD(day, -:days, GETDATE())
+        GROUP BY CAST(rsi.start_time AS DATE), ws.wait_category_desc
+    ),
+    totals AS (
+        SELECT
+            trend_date,
+            SUM(total_wait_ms) AS day_total_wait_ms
+        FROM daily
+        GROUP BY trend_date
+    )
+    SELECT
+        d.trend_date,
+        d.wait_category,
+        d.total_wait_ms,
+        CAST(
+            d.total_wait_ms * 100.0 / NULLIF(t.day_total_wait_ms, 0)
+            AS DECIMAL(5,2)
+        ) AS wait_percent
+    FROM daily d
+    JOIN totals t ON d.trend_date = t.trend_date
+    ORDER BY d.trend_date ASC, d.total_wait_ms DESC
+    """
+
+
+@dataclass(frozen=True)
+class WaitCategoryPattern:
+    category: WaitCategory
+    pattern: str
+
+
+class WaitCategoryResolver:
+    """
+    Category resolver with exact-match priority and regex pattern fallback.
+    """
+
+    _PATTERNS: Tuple[WaitCategoryPattern, ...] = (
+        WaitCategoryPattern(WaitCategory.CPU, r"(SOS_SCHEDULER|THREADPOOL|CXPACKET|CXCONSUMER|CXSYNC|SCHEDULER|CPU)"),
+        WaitCategoryPattern(WaitCategory.IO, r"(PAGEIO|WRITELOG|IO_COMPLETION|ASYNC_IO|DISK|OTHER DISK|LOG IO|\bI/?O\b)"),
+        WaitCategoryPattern(WaitCategory.LOCK, r"(^LCK_|LOCK|DEADLOCK)"),
+        WaitCategoryPattern(WaitCategory.LATCH, r"(PAGELATCH|LATCH_|LATCH)"),
+        WaitCategoryPattern(WaitCategory.MEMORY, r"(RESOURCE_SEMAPHORE|CMEMTHREAD|MEMORY|GRANT)"),
+        WaitCategoryPattern(WaitCategory.NETWORK, r"(ASYNC_NETWORK_IO|NETWORK|PACKET|NET_)"),
+        WaitCategoryPattern(WaitCategory.BUFFER, r"(BUFFER|BPOOL|BUFFER LATCH)"),
+        WaitCategoryPattern(WaitCategory.CLR, r"(^CLR_|SQL CLR|CLR)"),
+    )
+
+    # Query Store wait category descriptions and common textual aliases.
+    _CATEGORY_TEXT_ALIASES: Dict[str, WaitCategory] = {
+        "CPU": WaitCategory.CPU,
+        "PARALLELISM": WaitCategory.CPU,
+        "WORKER THREAD": WaitCategory.CPU,
+        "LOCK": WaitCategory.LOCK,
+        "LATCH": WaitCategory.LATCH,
+        "BUFFER LATCH": WaitCategory.BUFFER,
+        "BUFFER IO": WaitCategory.IO,
+        "TRAN LOG IO": WaitCategory.IO,
+        "OTHER DISK IO": WaitCategory.IO,
+        "NETWORK IO": WaitCategory.NETWORK,
+        "MEMORY": WaitCategory.MEMORY,
+        "SQL CLR": WaitCategory.CLR,
+        "CLR": WaitCategory.CLR,
+        "PREEMPTIVE": WaitCategory.OTHER,
+        "IDLE": WaitCategory.OTHER,
+        "USER WAIT": WaitCategory.OTHER,
+        "UNKNOWN": WaitCategory.OTHER,
+        "TRACING": WaitCategory.OTHER,
+        "SERVICE BROKER": WaitCategory.OTHER,
+        "TRANSACTION": WaitCategory.OTHER,
+        "REPLICATION": WaitCategory.OTHER,
+        "MIRRORING": WaitCategory.OTHER,
+        "COMPILATION": WaitCategory.CPU,
+        "LOG RATE GOVERNOR": WaitCategory.IO,
+    }
+
+    def __init__(self):
+        self._exact_map = dict(WAIT_CATEGORIES)
+        for key, value in list(WAIT_CATEGORIES.items()):
+            self._exact_map[str(key).upper()] = value
+        self._text_alias_map = {
+            str(key).strip().upper(): value
+            for key, value in self._CATEGORY_TEXT_ALIASES.items()
+        }
+        self._compiled_rules: List[Tuple[WaitCategory, re.Pattern[str]]] = [
+            (rule.category, re.compile(rule.pattern, re.IGNORECASE))
+            for rule in self._PATTERNS
+        ]
+
+    def resolve(self, wait_type_or_text: str) -> WaitCategory:
+        raw = str(wait_type_or_text or "").strip()
+        if not raw:
+            return WaitCategory.OTHER
+
+        direct = self._exact_map.get(raw)
+        if direct:
+            return direct
+        direct = self._exact_map.get(raw.upper())
+        if direct:
+            return direct
+
+        alias = self._text_alias_map.get(raw.upper())
+        if alias:
+            return alias
+
+        for category, pattern in self._compiled_rules:
+            if pattern.search(raw):
+                return category
+        return WaitCategory.OTHER
+
+
+_WAIT_CATEGORY_RESOLVER = WaitCategoryResolver()
+
 
 def get_wait_category(wait_type: str) -> WaitCategory:
     """Get category for a wait type"""
-    return WAIT_CATEGORIES.get(wait_type, WaitCategory.OTHER)
+    return _WAIT_CATEGORY_RESOLVER.resolve(wait_type)
+
+
+def resolve_wait_category_text(category_text: str) -> WaitCategory:
+    """
+    Resolve category text (from Query Store / UI labels) into WaitCategory.
+
+    This resolver is intentionally heuristic and case-insensitive.
+    """
+    return _WAIT_CATEGORY_RESOLVER.resolve(category_text)
 
 
 def get_category_color(category: WaitCategory) -> str:

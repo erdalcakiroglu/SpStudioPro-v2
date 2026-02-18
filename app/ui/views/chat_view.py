@@ -194,38 +194,6 @@ class ChatView(BaseView):
 
         home_layout.addStretch(2)
 
-        # ─── Title & Subtitle ───
-        title_container = QWidget()
-        title_container.setStyleSheet("background: transparent;")
-        title_layout = QVBoxLayout(title_container)
-        title_layout.setContentsMargins(0, 0, 0, 0)
-        title_layout.setSpacing(12)
-
-        title = QLabel("Chat with your Database")
-        title.setStyleSheet(f"""
-            color: {Colors.TEXT_PRIMARY};
-            font-size: 36px;
-            font-weight: bold;
-            background: transparent;
-        """)
-        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        title.setFont(QFont("Segoe UI", 34, QFont.Weight.Bold))
-        title_layout.addWidget(title)
-
-        subtitle = QLabel("Ask performance questions, inspect slow queries, and get AI-powered tuning suggestions.")
-        subtitle.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY};
-            font-size: 15px;
-            background: transparent;
-        """)
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        subtitle.setFont(QFont("Segoe UI", 14))
-        subtitle.setWordWrap(True)
-        title_layout.addWidget(subtitle)
-
-        home_layout.addWidget(title_container)
-        home_layout.addSpacing(50)
-
         # ─── Chat Card ───
         chat_card = QFrame()
         chat_card.setStyleSheet(f"""

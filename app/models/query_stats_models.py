@@ -249,13 +249,28 @@ class QueryStats:
     @property
     def display_name(self) -> str:
         """Gösterim adı"""
-        if self.object_name:
+        def _is_missing(value: Optional[str]) -> bool:
+            if value is None:
+                return True
+            normalized = str(value).strip().lower()
+            return normalized in ("", "n/a", "na", "null", "unknown")
+
+        if not _is_missing(self.object_name):
             if self.schema_name:
                 return f"{self.schema_name}.{self.object_name}"
-            return self.object_name
+            return str(self.object_name)
+
         # Query text'in ilk 50 karakteri
-        text = self.query_text.strip()[:50]
-        return text + "..." if len(self.query_text) > 50 else text
+        raw = str(self.query_text or "").strip()
+        if not raw or raw.strip().lower() in ("n/a", "na", "null", "unknown"):
+            if self.query_id:
+                return f"Adhoc Query #{self.query_id}"
+            if self.query_hash:
+                return f"Adhoc Query {self.query_hash[:10]}"
+            return "Adhoc Query"
+
+        text = raw[:50]
+        return text + "..." if len(raw) > 50 else text
     
     @property
     def trend_direction(self) -> str:
@@ -318,6 +333,9 @@ class QueryStoreStatus:
     actual_state: str = ""
     current_storage_mb: float = 0.0
     max_storage_mb: float = 0.0
+    query_capture_mode: str = ""
+    stale_query_threshold_days: int = 0
+    size_based_cleanup_mode: str = ""
     
     @property
     def is_operational(self) -> bool:
@@ -331,6 +349,13 @@ class QueryStoreStatus:
             return 0.0
         return (self.current_storage_mb / self.max_storage_mb) * 100
 
+    def has_min_retention(self, min_days: int = 1) -> bool:
+        """Configured Query Store retention meets minimum requirement."""
+        try:
+            return int(self.stale_query_threshold_days or 0) >= int(min_days)
+        except Exception:
+            return False
+
 
 @dataclass
 class QueryStatsFilter:
@@ -339,17 +364,45 @@ class QueryStatsFilter:
     """
     time_range_days: int = 7
     sort_by: str = "impact_score"
-    top_n: int = 50
+    top_n: int = 1000
+    offset: int = 0
+    page_size: int = 100
     search_text: str = ""
     min_executions: int = 0
     min_duration_ms: float = 0.0
     object_name_filter: Optional[str] = None
     priority_filter: Optional[QueryPriority] = None
+
+    @property
+    def days(self) -> int:
+        """Backward-compatible alias for time_range_days."""
+        return self.time_range_days
+
+    @days.setter
+    def days(self, value: int) -> None:
+        try:
+            self.time_range_days = int(value)
+        except Exception:
+            self.time_range_days = 7
+
+    @property
+    def order_by(self) -> str:
+        """Backward-compatible alias for sort_by."""
+        return self.sort_by
+
+    @order_by.setter
+    def order_by(self, value: str) -> None:
+        self.sort_by = str(value or "impact_score")
     
     def to_params(self) -> Dict[str, Any]:
         """SQL sorgu parametrelerine dönüştür"""
+        safe_top_n = max(1, int(self.top_n or 1))
+        safe_offset = max(0, int(self.offset or 0))
+        safe_page_size = max(1, int(self.page_size or 1))
         return {
             "days": self.time_range_days,
             "sort_by": self.sort_by,
-            "top_n": self.top_n,
+            "top_n": safe_top_n,
+            "offset": safe_offset,
+            "page_size": safe_page_size,
         }

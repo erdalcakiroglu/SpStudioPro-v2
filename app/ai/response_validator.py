@@ -157,6 +157,25 @@ class AIResponseValidator:
         (r'\bEXEC\s*\(\s*@', "Dynamic SQL (dikkatli kullanın)", -5),
         (r"N?'[^']*'\s*\+\s*@", "String concatenation with variable", -8),
     ]
+
+    # SQL Server version compatibility checks (major versions)
+    # Keep this list conservative to avoid false positives.
+    VERSION_FEATURE_RULES: List[Tuple[str, int, str, str]] = [
+        (r"\bSTRING_AGG\s*\(", 14, "STRING_AGG requires SQL Server 2017+.", "Use FOR XML PATH + STUFF (or upgrade)."),
+        (r"\bCONCAT_WS\s*\(", 14, "CONCAT_WS requires SQL Server 2017+.", "Use CONCAT with NULL-handling (or upgrade)."),
+        (r"\bTRANSLATE\s*\(", 14, "TRANSLATE requires SQL Server 2017+.", "Use nested REPLACE (or upgrade)."),
+        (r"\bDROP\s+(?:PROCEDURE|PROC|FUNCTION|VIEW|TRIGGER|TABLE|INDEX)\s+IF\s+EXISTS\b", 13, "DROP ... IF EXISTS requires SQL Server 2016+.", "Use IF OBJECT_ID(...) IS NOT NULL / IF EXISTS then DROP."),
+        (r"\bCREATE\s+OR\s+ALTER\b", 13, "CREATE OR ALTER requires SQL Server 2016 SP1+.", "Use IF OBJECT_ID(...) IS NULL CREATE else ALTER."),
+        (r"\bOPENJSON\b|\bJSON_VALUE\b|\bJSON_QUERY\b|\bISJSON\b", 13, "JSON functions require SQL Server 2016+.", "Avoid JSON functions or provide a non-JSON alternative."),
+        (r"\bAT\s+TIME\s+ZONE\b", 13, "AT TIME ZONE requires SQL Server 2016+.", "Use a timezone lookup table or handle in application layer."),
+        (r"\bSTRING_SPLIT\b", 13, "STRING_SPLIT requires SQL Server 2016+.", "Use an XML splitter or a TVF alternative."),
+        (r"\bAPPROX_COUNT_DISTINCT\b", 15, "APPROX_COUNT_DISTINCT requires SQL Server 2019+.", "Use COUNT(DISTINCT ...) (or upgrade)."),
+        (r"\bTRIM\s*\(", 16, "TRIM requires SQL Server 2022+.", "Use LTRIM(RTRIM(...)) (or upgrade)."),
+        (r"\bDATETRUNC\b", 16, "DATETRUNC requires SQL Server 2022+.", "Use DATEADD/DATEDIFF patterns (or upgrade)."),
+        (r"\bGENERATE_SERIES\b", 16, "GENERATE_SERIES requires SQL Server 2022+.", "Use a numbers table or recursive CTE (or upgrade)."),
+        (r"\bLEAST\b|\bGREATEST\b", 16, "LEAST/GREATEST require SQL Server 2022+.", "Use CASE expressions (or upgrade)."),
+        (r"\bJSON_OBJECT\b|\bJSON_ARRAY\b", 16, "JSON_OBJECT/JSON_ARRAY require SQL Server 2022+.", "Construct JSON manually (or upgrade)."),
+    ]
     
     def __init__(self, strict_mode: bool = False):
         """
@@ -187,8 +206,13 @@ class AIResponseValidator:
             (re.compile(p, re.IGNORECASE | re.MULTILINE), msg, score)
             for p, msg, score in self.ANTI_PATTERNS
         ]
+
+        self._version_feature_patterns = [
+            (re.compile(p, re.IGNORECASE | re.MULTILINE), min_major, msg, suggestion)
+            for p, min_major, msg, suggestion in self.VERSION_FEATURE_RULES
+        ]
     
-    def validate(self, response: str) -> ValidationResult:
+    def validate(self, response: str, sql_major_version: Optional[int] = None) -> ValidationResult:
         """
         AI response'u doğrula ve sanitize et
         
@@ -224,7 +248,10 @@ class AIResponseValidator:
         
         # 4. Anti-pattern kontrolü
         self._check_anti_patterns(response, result)
-        
+
+        # 4b. SQL Server version compatibility (if version is known)
+        self._check_version_compatibility(response, result, sql_major_version)
+         
         # 5. SQL syntax temel kontrolü
         self._check_sql_syntax(response, result)
         
@@ -247,6 +274,52 @@ class AIResponseValidator:
             result.is_valid = False
         
         return result
+
+    @staticmethod
+    def _detect_active_sql_major_version() -> Optional[int]:
+        try:
+            from app.database.connection import get_connection_manager
+
+            conn = get_connection_manager().active_connection
+            if not conn or not getattr(conn, "info", None):
+                return None
+            major = getattr(conn.info, "major_version", None)
+            return int(major) if major is not None else None
+        except Exception:
+            return None
+
+    def _check_version_compatibility(
+        self,
+        response: str,
+        result: ValidationResult,
+        sql_major_version: Optional[int] = None,
+    ) -> None:
+        if not response or not response.strip():
+            return
+
+        major = sql_major_version
+        if major is None:
+            major = self._detect_active_sql_major_version()
+        if not major:
+            return
+
+        # Only run this check when it looks like the response contains SQL.
+        upper = response.upper()
+        looks_like_sql = ("```SQL" in upper) or ("CREATE " in upper) or ("ALTER " in upper) or ("SELECT " in upper)
+        if not looks_like_sql:
+            return
+
+        for pattern, min_major, msg, suggestion in self._version_feature_patterns:
+            if major < min_major and pattern.search(response):
+                result.issues.append(
+                    ValidationIssue(
+                        severity=ValidationSeverity.WARNING,
+                        category="Version",
+                        message=f"{msg} Current server major version: {major}.",
+                        suggestion=suggestion,
+                        blocked=False,
+                    )
+                )
     
     def _check_critical_commands(self, response: str, result: ValidationResult) -> None:
         """Kritik tehlikeli komutları kontrol et"""
